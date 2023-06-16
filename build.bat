@@ -1,3 +1,3 @@
 @ECHO OFF
 
-clang .\src\main.cpp -lUser32 -lGdi32
+clang .\src\main.cpp -g -lUser32 -lGdi32
