@@ -2,6 +2,37 @@
 #include <cfloat>
 #include <cmath>
 
+using u32 = unsigned int;
+
+u32 noise_1d(const int x, const u32 seed) {
+    static constexpr u32 BIT_NOISE_1 = 0x68E31DA4;
+    static constexpr u32 BIT_NOISE_2 = 0xB5297A4D;
+    static constexpr u32 BIT_NOISE_3 = 0x1B56C4E9;
+
+    u32 mangled = static_cast<u32>(x);
+    mangled *= BIT_NOISE_1;
+    mangled += seed;
+    mangled ^= (mangled >> 8);
+    mangled += BIT_NOISE_2;
+    mangled ^= (mangled << 8);
+    mangled *= BIT_NOISE_3;
+    mangled ^= (mangled >> 8);
+
+    return mangled;
+}
+
+u32 noise_3d(const int x, const int y, const int z, const u32 seed) {
+    static constexpr int PRIME_1 = 198491317;
+    static constexpr int PRIME_2 = 6542989;
+    const int new_x = x + PRIME_1 * y + PRIME_2 * z;
+    const u32 result = noise_1d(new_x, seed);
+    return result;
+}
+
+float float_from_rng_seed(const u32 rng_seed) {
+    return static_cast<float>(rng_seed) / static_cast<float>(UINT_MAX);
+}
+
 struct Vec3 {
     float x;
     float y;
@@ -91,6 +122,22 @@ Colour operator+(const Colour& lhs, const Colour& rhs) {
 
 Colour operator*(const float scalar, const Colour& colour) {
     return Colour{scalar * colour.r, scalar * colour.g, scalar * colour.b};
+}
+
+Colour& operator+=(Colour& lhs, const Colour& rhs) {
+    lhs.r += rhs.r;
+    lhs.g += rhs.g;
+    lhs.b += rhs.b;
+
+    return lhs;
+}
+
+Colour& operator/=(Colour& lhs, const float scalar) {
+    lhs.r /= scalar;
+    lhs.g /= scalar;
+    lhs.b /= scalar;
+
+    return lhs;
 }
 
 #include <Windows.h>
@@ -186,7 +233,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     bitmap_info.bmiHeader.biClrUsed = 0;
     bitmap_info.bmiHeader.biClrImportant = 0;
 
-    unsigned char* pixels = static_cast<unsigned char*>(VirtualAlloc(0, CLIENT_WIDTH * CLIENT_HEIGHT * sizeof(unsigned int), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    unsigned char* pixels = static_cast<unsigned char*>(VirtualAlloc(0, 4 * CLIENT_WIDTH * CLIENT_HEIGHT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(pixels != nullptr);
 
     static constexpr float VIEWPORT_HEIGHT = 2.0f;
@@ -201,36 +248,52 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         Sphere{Vec3{0.0f, -100.5f, -1.0f}, 100.0f}
     };
 
-    for (int row = 0; row < CLIENT_HEIGHT; ++row) {
-        const float v = static_cast<float>(row) / static_cast<float>(CLIENT_HEIGHT - 1);
-        for (int column = 0; column < CLIENT_WIDTH; ++column) {
-            const float u = static_cast<float>(column) / static_cast<float>(CLIENT_WIDTH - 1);
-            const Ray ray{Vec3{0.0f, 0.0f, 0.0f}, normalise(Vec3{BOTTOM_LEFT + u * Vec3{VIEWPORT_WIDTH, 0.0f, 0.0f} + v * Vec3{0.0f, VIEWPORT_HEIGHT, 0.0f}})};
+    static constexpr int SAMPLES_PER_PIXEL = 100;
 
-            int closest_intersecting_sphere_index = -1;
-            float closest_intersecting_sphere_distance = FLT_MAX;
-            for (int sphere_index = 0; sphere_index < SPHERE_COUNT; ++sphere_index) {
-                const Maybe<SphereIntersections> intersection_result = intersect(ray, SPHERES[sphere_index]);
-                if (intersection_result.valid) {
-                    if (0.0f < intersection_result.value.distance_1 && intersection_result.value.distance_1 < closest_intersecting_sphere_distance) {
-                        closest_intersecting_sphere_index = sphere_index;
-                        closest_intersecting_sphere_distance = intersection_result.value.distance_1;
-                    } else if (0.0f < intersection_result.value.distance_2 && intersection_result.value.distance_2 < closest_intersecting_sphere_distance) {
-                        closest_intersecting_sphere_index = sphere_index;
-                        closest_intersecting_sphere_distance = intersection_result.value.distance_2;
+    static constexpr u32 RNG_SEED = 0;
+
+    for (int row = 0; row < CLIENT_HEIGHT; ++row) {
+        for (int column = 0; column < CLIENT_WIDTH; ++column) {
+            Colour colour = {};
+            for (int sample_index = 0; sample_index < SAMPLES_PER_PIXEL; ++sample_index) {
+                const u32 u_rng_seed = noise_3d(row, column, sample_index + 0, RNG_SEED);
+                const float u_randomness = float_from_rng_seed(u_rng_seed);
+                const float u = (static_cast<float>(column) + u_randomness) / static_cast<float>(CLIENT_WIDTH - 1);
+
+                const u32 v_rng_seed = noise_3d(row, column, sample_index + 1, RNG_SEED);
+                const float v_randomness = float_from_rng_seed(v_rng_seed);
+                const float v = (static_cast<float>(row) + v_randomness) / static_cast<float>(CLIENT_HEIGHT - 1);
+
+                const Vec3 ray_origin{0.0f, 0.0f, 0.0f};
+                const Vec3 ray_direction = normalise(Vec3{BOTTOM_LEFT + u * Vec3{VIEWPORT_WIDTH, 0.0f, 0.0f} + v * Vec3{0.0f, VIEWPORT_HEIGHT, 0.0f}});
+                const Ray ray{ray_origin, ray_direction};
+
+                int closest_intersecting_sphere_index = -1;
+                float closest_intersecting_sphere_distance = FLT_MAX;
+                for (int sphere_index = 0; sphere_index < SPHERE_COUNT; ++sphere_index) {
+                    const Maybe<SphereIntersections> intersection_result = intersect(ray, SPHERES[sphere_index]);
+                    if (intersection_result.valid) {
+                        if (0.0f < intersection_result.value.distance_1 && intersection_result.value.distance_1 < closest_intersecting_sphere_distance) {
+                            closest_intersecting_sphere_index = sphere_index;
+                            closest_intersecting_sphere_distance = intersection_result.value.distance_1;
+                        } else if (0.0f < intersection_result.value.distance_2 && intersection_result.value.distance_2 < closest_intersecting_sphere_distance) {
+                            closest_intersecting_sphere_index = sphere_index;
+                            closest_intersecting_sphere_distance = intersection_result.value.distance_2;
+                        }
                     }
+                }
+
+                if (closest_intersecting_sphere_index != -1) {
+                    const Sphere& sphere = SPHERES[closest_intersecting_sphere_index];
+                    const Vec3 intersection_point = ray.origin + closest_intersecting_sphere_distance * ray.direction;
+                    const Vec3 sphere_unit_normal = normalise(intersection_point - sphere.centre);
+                    colour += Colour{0.5f * (sphere_unit_normal.x + 1.0f), 0.5f * (sphere_unit_normal.y + 1.0f), 0.5f * (sphere_unit_normal.z + 1.0f)};
+                } else {
+                    colour += background_gradient(ray);
                 }
             }
 
-            Colour colour = {};
-            if (closest_intersecting_sphere_index != -1) {
-                const Sphere& sphere = SPHERES[closest_intersecting_sphere_index];
-                const Vec3 intersection_point = ray.origin + closest_intersecting_sphere_distance * ray.direction;
-                const Vec3 sphere_unit_normal = normalise(intersection_point - sphere.centre);
-                colour = Colour{0.5f * (sphere_unit_normal.x + 1.0f), 0.5f * (sphere_unit_normal.y + 1.0f), 0.5f * (sphere_unit_normal.z + 1.0f)};
-            } else {
-                colour = background_gradient(ray);
-            }
+            colour /= static_cast<float>(SAMPLES_PER_PIXEL);
 
             const int index = 4 * (row * CLIENT_WIDTH + column);
             pixels[index + 0] = static_cast<unsigned char>(255.0f * colour.b);
