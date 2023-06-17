@@ -173,10 +173,22 @@ static Colour operator*(const real scalar, const Colour& colour) {
     return Colour{scalar * colour.r, scalar * colour.g, scalar * colour.b};
 }
 
+static Colour operator*(const Colour& lhs, const Colour& rhs) {
+    return Colour{lhs.r * rhs.r, lhs.g * rhs.g, lhs.b * rhs.b};
+}
+
 static Colour& operator+=(Colour& lhs, const Colour& rhs) {
     lhs.r += rhs.r;
     lhs.g += rhs.g;
     lhs.b += rhs.b;
+
+    return lhs;
+}
+
+static Colour& operator*=(Colour& lhs, const Colour& rhs) {
+    lhs.r *= rhs.r;
+    lhs.g *= rhs.g;
+    lhs.b *= rhs.b;
 
     return lhs;
 }
@@ -194,29 +206,39 @@ static Colour background_gradient(const Ray& ray) {
     return (1.0f - t) * Colour{1.0, 1.0, 1.0} + t * Colour{0.5, 0.7, 1.0};
 }
 
+struct Material {
+    Colour albedo;
+};
+
 struct Scene {
+    const Material* materials;
+    
     const Sphere* spheres;
+    const int* sphere_material_indices;
     int sphere_count;
 };
 
 static Colour intersect(Ray ray, const Scene& scene) {
     static constexpr int MAX_BOUNCE_COUNT = 50;
 
-    Colour colour = {};
-    real strength = 1.0f;
+    Colour colour = {0.0f, 0.0f, 0.0f};
+    Colour attenuation = {1.0f, 1.0f, 1.0f};
     for (int bounce_index = 0; bounce_index < MAX_BOUNCE_COUNT; ++bounce_index) {
         const Maybe<ClosestSphereIntersection> closest_sphere_intersection = intersect(ray, scene.spheres, scene.sphere_count);
         if (closest_sphere_intersection.valid) {
-            const Sphere& sphere = scene.spheres[closest_sphere_intersection.value.index];
+            const int sphere_index = closest_sphere_intersection.value.index;
+            const Sphere& sphere = scene.spheres[sphere_index];
             const Vec3 intersection_point = ray.origin + closest_sphere_intersection.value.distance * ray.direction;
             const Vec3 sphere_unit_normal = normalise(intersection_point - sphere.centre);
             ray.origin = intersection_point + 0.001 * sphere_unit_normal;
             const Vec3 random = random_unit_vector(ray.origin);
             ray.direction = normalise(sphere_unit_normal + random);
 
-            strength *= 0.5f;
+            const int sphere_material_index = scene.sphere_material_indices[sphere_index];
+            const Material& sphere_material = scene.materials[sphere_material_index];
+            attenuation *= sphere_material.albedo;
         } else {
-            colour = strength * background_gradient(ray);
+            colour += attenuation * background_gradient(ray);
             break;
         }
     }
@@ -321,13 +343,25 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     static constexpr Vec3 BOTTOM_LEFT{-0.5f * VIEWPORT_WIDTH, -0.5f * VIEWPORT_HEIGHT, -FOCAL_LENGTH};
 
+    static constexpr Material MATERIALS[2] = {
+        Material{Colour{1.0f, 0.0f, 0.0f}},
+        Material{Colour{0.0f, 1.0f, 0.0f}}
+    };
+
     static constexpr int SPHERE_COUNT = 2;
     static constexpr Sphere SPHERES[SPHERE_COUNT] = {
         Sphere{Vec3{0.0f, 0.0f, -1.0f}, 0.5f},
         Sphere{Vec3{0.0f, -100.5f, -1.0f}, 100.0f}
     };
 
-    const Scene scene{SPHERES, SPHERE_COUNT};
+    static constexpr int SPHERE_MATERIAL_INDICES[SPHERE_COUNT] = {0, 1};
+
+    const Scene scene{
+        MATERIALS,
+        SPHERES,
+        SPHERE_MATERIAL_INDICES,
+        SPHERE_COUNT
+    };
 
     static constexpr int SAMPLES_PER_PIXEL = 100;
 
