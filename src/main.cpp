@@ -206,9 +206,62 @@ static Colour background_gradient(const Ray& ray) {
     return (1.0f - t) * Colour{1.0, 1.0, 1.0} + t * Colour{0.5, 0.7, 1.0};
 }
 
-struct Material {
+struct Lambertian {
     Colour albedo;
 };
+
+struct Metal {
+    Colour albedo;
+    real fuzziness;
+};
+
+struct Material {
+    enum Type {
+        LAMBERTIAN = 0,
+        METAL = 1
+    };
+
+    union {
+        Lambertian lambertian;
+        Metal metal;
+    };
+
+    Type type;
+};
+
+static Material construct_lambertian_material(const Colour& albedo) {
+    Material material = {};
+    material.lambertian.albedo = albedo;
+    material.type = Material::Type::LAMBERTIAN;
+
+    return material;
+}
+
+static Material construct_metal_material(const Colour& albedo, const real fuzziness) {
+    Material material = {};
+    material.metal.albedo = albedo;
+    material.metal.fuzziness = fuzziness;
+    material.type = Material::Type::METAL;
+
+    return material;
+}
+
+static Colour get_albedo(const Material& material) {
+    switch (material.type) {
+        case Material::Type::LAMBERTIAN: {
+            return material.lambertian.albedo;
+        }
+
+        case Material::Type::METAL: {
+            return material.metal.albedo;
+        }
+
+        default: {
+            assert(false);
+            return Colour{0.0f, 0.0f, 0.0f};
+        }
+    }
+}
 
 struct Scene {
     const Material* materials;
@@ -217,6 +270,32 @@ struct Scene {
     const int* sphere_material_indices;
     int sphere_count;
 };
+
+Maybe<Vec3> scatter(const Vec3& direction, const Vec3& point, const Vec3& point_unit_normal, const Material& material) {
+    switch (material.type) {
+        case Material::Type::LAMBERTIAN: {
+            const Vec3 random = random_unit_vector(point);
+            Maybe<Vec3> scattered_direction = {};
+            scattered_direction.value = normalise(point_unit_normal + random);
+            scattered_direction.valid = true;
+            return scattered_direction;
+        }
+
+        case Material::Type::METAL: {
+            Maybe<Vec3> scattered_direction = {};
+            const Vec3 random = random_unit_vector(point);
+            const real fuzziness = material.metal.fuzziness;
+            scattered_direction.value = normalise(direction - 2.0f * (direction * point_unit_normal) * point_unit_normal + fuzziness * random);
+            scattered_direction.valid = (scattered_direction.value * point_unit_normal > 0.0f);
+            return scattered_direction;
+        }
+
+        default: {
+            assert(false);
+            return Maybe<Vec3>{};
+        }
+    }
+}
 
 static Colour intersect(Ray ray, const Scene& scene) {
     static constexpr int MAX_BOUNCE_COUNT = 50;
@@ -230,13 +309,21 @@ static Colour intersect(Ray ray, const Scene& scene) {
             const Sphere& sphere = scene.spheres[sphere_index];
             const Vec3 intersection_point = ray.origin + closest_sphere_intersection.value.distance * ray.direction;
             const Vec3 sphere_unit_normal = normalise(intersection_point - sphere.centre);
-            ray.origin = intersection_point + 0.001 * sphere_unit_normal;
-            const Vec3 random = random_unit_vector(ray.origin);
-            ray.direction = normalise(sphere_unit_normal + random);
 
             const int sphere_material_index = scene.sphere_material_indices[sphere_index];
             const Material& sphere_material = scene.materials[sphere_material_index];
-            attenuation *= sphere_material.albedo;
+
+            const Maybe<Vec3> scattered_ray_direction = scatter(ray.direction, intersection_point, sphere_unit_normal, sphere_material);
+            if (scattered_ray_direction.valid) {
+                ray.origin = intersection_point + 0.001 * sphere_unit_normal;
+                ray.direction = scattered_ray_direction.value;
+
+                const Colour& sphere_material_albedo = get_albedo(sphere_material);
+                attenuation *= sphere_material_albedo;
+            } else {
+                colour = Colour{0.0f, 0.0f, 0.0f};
+                break;
+            }
         } else {
             colour += attenuation * background_gradient(ray);
             break;
@@ -343,21 +430,25 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     static constexpr Vec3 BOTTOM_LEFT{-0.5f * VIEWPORT_WIDTH, -0.5f * VIEWPORT_HEIGHT, -FOCAL_LENGTH};
 
-    static constexpr Material MATERIALS[2] = {
-        Material{Colour{1.0f, 0.0f, 0.0f}},
-        Material{Colour{0.0f, 1.0f, 0.0f}}
+    const Material materials[4] = {
+        construct_lambertian_material(Colour{0.8f, 0.8f, 0.0f}),    // ground
+        construct_lambertian_material(Colour{0.7f, 0.3f, 0.3f}),    // middle
+        construct_metal_material(Colour{0.8f, 0.8f, 0.8f}, 0.3f),   // left
+        construct_metal_material(Colour{0.8f, 0.6f, 0.2f}, 1.0f)    // right
     };
 
-    static constexpr int SPHERE_COUNT = 2;
+    static constexpr int SPHERE_COUNT = 4;
     static constexpr Sphere SPHERES[SPHERE_COUNT] = {
-        Sphere{Vec3{0.0f, 0.0f, -1.0f}, 0.5f},
-        Sphere{Vec3{0.0f, -100.5f, -1.0f}, 100.0f}
+        Sphere{Vec3{0.0f, -100.5f, -1.0f}, 100.0f}, // ground
+        Sphere{Vec3{0.0f, 0.0f, -1.0f}, 0.5f},      // middle
+        Sphere{Vec3{-1.0f, 0.0f, -1.0f}, 0.5f},     // left
+        Sphere{Vec3{1.0f, 0.0f, -1.0f}, 0.5f}       // right
     };
 
-    static constexpr int SPHERE_MATERIAL_INDICES[SPHERE_COUNT] = {0, 1};
+    static constexpr int SPHERE_MATERIAL_INDICES[SPHERE_COUNT] = {0, 1, 2, 3};
 
     const Scene scene{
-        MATERIALS,
+        materials,
         SPHERES,
         SPHERE_MATERIAL_INDICES,
         SPHERE_COUNT
