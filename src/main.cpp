@@ -62,6 +62,14 @@ static real operator*(const Vec3& lhs, const Vec3& rhs) {
     return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
 }
 
+static Vec3 operator^(const Vec3& lhs, const Vec3& rhs) {
+    return Vec3{
+        lhs.y * rhs.z - lhs.z * rhs.y,
+        lhs.z * rhs.x - lhs.x * rhs.z,
+        lhs.x * rhs.y - lhs.y * rhs.x
+    };
+}
+
 static real magnitude(const Vec3& v) {
     return std::sqrt(v * v);
 }
@@ -504,11 +512,23 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     unsigned char* pixels = static_cast<unsigned char*>(VirtualAlloc(0, 4 * CLIENT_WIDTH * CLIENT_HEIGHT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(pixels != nullptr);
 
-    static constexpr real VIEWPORT_HEIGHT = 2.0f;
-    static constexpr real VIEWPORT_WIDTH = ASPECT_RATIO * VIEWPORT_HEIGHT;
+    static constexpr real FOV_Y_DEGREES = 20.0f;
     static constexpr real FOCAL_LENGTH = 1.0f;
 
-    static constexpr Vec3 BOTTOM_LEFT{-0.5f * VIEWPORT_WIDTH, -0.5f * VIEWPORT_HEIGHT, -FOCAL_LENGTH};
+    static constexpr real PI = 3.14159265358979323846264f;
+
+    const real fov_y = FOV_Y_DEGREES / 180.0f * PI;
+    const real viewport_height = 2.0f * std::tan(0.5f * fov_y);
+    const real viewport_width = ASPECT_RATIO * viewport_height;
+
+    static constexpr Vec3 camera_position{-2.0f, 2.0f, 1.0f};
+    static constexpr Vec3 camera_target{0.0f, 0.0f, -1.0f};
+
+    const Vec3 camera_z = normalise(camera_position - camera_target);
+    const Vec3 camera_x = normalise(Vec3{0.0f, 1.0f, 0.0f} ^ camera_z);
+    const Vec3 camera_y = camera_z ^ camera_x;
+
+    const Vec3 bottom_left = camera_position - 0.5f * viewport_width * camera_x -0.5f * viewport_height * camera_y - camera_z;
 
     const Material materials[4] = {
         construct_lambertian_material(Colour{0.8f, 0.8f, 0.0f}),    // ground
@@ -549,9 +569,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
                 const real v_randomness = real_from_rng_seed(v_rng_seed);
                 const real v = (static_cast<real>(row) + v_randomness) / static_cast<real>(CLIENT_HEIGHT - 1);
 
-                const Vec3 ray_origin{0.0f, 0.0f, 0.0f};
-                const Vec3 ray_direction = normalise(Vec3{BOTTOM_LEFT + u * Vec3{VIEWPORT_WIDTH, 0.0f, 0.0f} + v * Vec3{0.0f, VIEWPORT_HEIGHT, 0.0f}});
-                const Ray ray{ray_origin, ray_direction};
+                const Vec3 ray_direction = normalise(Vec3{bottom_left + u * viewport_width * camera_x + v * viewport_height * camera_y - camera_position});
+                const Ray ray{camera_position, ray_direction};
 
                 colour += intersect(ray, scene);
             }
