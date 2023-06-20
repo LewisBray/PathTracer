@@ -46,6 +46,10 @@ static Vec3 operator+(const Vec3& lhs, const Vec3& rhs) {
     return Vec3{lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z};
 }
 
+static Vec3 operator-(const Vec3& v) {
+    return Vec3{-v.x, -v.y, -v.z};
+}
+
 static Vec3 operator-(const Vec3& lhs, const Vec3& rhs) {
     return Vec3{lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
 }
@@ -67,7 +71,7 @@ static Vec3 normalise(const Vec3& v) {
     return inverse_magnitude * v;
 }
 
-static constexpr u32 RNG_SEED = 0;
+static constexpr u32 RNG_SEED = 1;
 
 static Vec3 random_unit_vector(const Vec3 seed) {
     const int x = static_cast<int>(1000000000.0f * seed.x);
@@ -215,15 +219,21 @@ struct Metal {
     real fuzziness;
 };
 
+struct Dielectric {
+    real refraction_index;
+};
+
 struct Material {
     enum Type {
         LAMBERTIAN = 0,
-        METAL = 1
+        METAL = 1,
+        DIELECTRIC = 2
     };
 
     union {
         Lambertian lambertian;
         Metal metal;
+        Dielectric dielectric;
     };
 
     Type type;
@@ -246,7 +256,15 @@ static Material construct_metal_material(const Colour& albedo, const real fuzzin
     return material;
 }
 
-static Colour get_albedo(const Material& material) {
+static Material construct_dielectric_material(const real refraction_index) {
+    Material material = {};
+    material.dielectric.refraction_index = refraction_index;
+    material.type = Material::Type::DIELECTRIC;
+
+    return material;
+}
+
+static Colour get_colour(const Material& material) {
     switch (material.type) {
         case Material::Type::LAMBERTIAN: {
             return material.lambertian.albedo;
@@ -254,6 +272,10 @@ static Colour get_albedo(const Material& material) {
 
         case Material::Type::METAL: {
             return material.metal.albedo;
+        }
+
+        case Material::Type::DIELECTRIC: {
+            return Colour{1.0f, 1.0f, 1.0f};
         }
 
         default: {
@@ -271,28 +293,86 @@ struct Scene {
     int sphere_count;
 };
 
-Maybe<Vec3> scatter(const Vec3& direction, const Vec3& point, const Vec3& point_unit_normal, const Material& material) {
+static Vec3 reflect(const Vec3& direction, const Vec3& unit_normal) {
+    assert(std::abs(magnitude(direction) - 1.0f) < 1.0e-6);
+    assert(std::abs(magnitude(unit_normal) - 1.0f) < 1.0e-6);
+
+    return direction - 2.0f * (direction * unit_normal) * unit_normal;
+}
+
+static Vec3 refract(const Vec3& direction, const Vec3& unit_normal, const real refraction_ratio) {
+    assert(std::abs(magnitude(direction) - 1.0f) < 1.0e-6);
+    assert(std::abs(magnitude(unit_normal) - 1.0f) < 1.0e-6);
+
+    const real cos_theta = -direction * unit_normal;
+    assert(cos_theta >= -1.0f);
+    assert(cos_theta <= 1.0f);
+    const Vec3 refracted_direction_perpendicular = refraction_ratio * (direction + cos_theta * unit_normal);
+    const Vec3 refracted_direction_parallel = -std::sqrt(std::abs(1.0f - refracted_direction_perpendicular * refracted_direction_perpendicular)) * unit_normal;
+
+    return normalise(refracted_direction_perpendicular + refracted_direction_parallel);
+}
+
+// Uses Schlick's approximation of reflectance
+static double reflectance(const real cos_theta, const real refraction_ratio) {
+    const real ratio = (1.0f - refraction_ratio) / (1.0f + refraction_ratio);
+    const real r0 = ratio * ratio;
+    const real difference = (1.0f - cos_theta);
+
+    return r0 + (1.0f - r0) * difference * difference * difference * difference * difference;
+}
+
+static Maybe<Ray> scatter(const Ray& ray, const Vec3& point, const Vec3& point_unit_normal, const Material& material) {
+    assert(std::abs(magnitude(ray.direction) - 1.0f) < 1.0e-6);
+    assert(std::abs(magnitude(point_unit_normal) - 1.0f) < 1.0e-6);
+
     switch (material.type) {
         case Material::Type::LAMBERTIAN: {
             const Vec3 random = random_unit_vector(point);
-            Maybe<Vec3> scattered_direction = {};
-            scattered_direction.value = normalise(point_unit_normal + random);
-            scattered_direction.valid = true;
-            return scattered_direction;
+            Maybe<Ray> scattered_ray = {};
+            scattered_ray.value.origin = point + 0.001 * point_unit_normal;
+            scattered_ray.value.direction = normalise(point_unit_normal + random);
+            scattered_ray.valid = true;
+            
+            return scattered_ray;
         }
 
         case Material::Type::METAL: {
-            Maybe<Vec3> scattered_direction = {};
+            Maybe<Ray> scattered_ray = {};
             const Vec3 random = random_unit_vector(point);
             const real fuzziness = material.metal.fuzziness;
-            scattered_direction.value = normalise(direction - 2.0f * (direction * point_unit_normal) * point_unit_normal + fuzziness * random);
-            scattered_direction.valid = (scattered_direction.value * point_unit_normal > 0.0f);
-            return scattered_direction;
+            scattered_ray.value.origin = point + 0.001 * point_unit_normal;
+            scattered_ray.value.direction = normalise(reflect(ray.direction, point_unit_normal) + fuzziness * random);
+            scattered_ray.valid = (scattered_ray.value.direction * point_unit_normal > 0.0f);
+            
+            return scattered_ray;
+        }
+
+        case Material::Type::DIELECTRIC: {
+            Maybe<Ray> scattered_ray = {};
+            const bool front_face = (ray.direction * point_unit_normal < 0.0f);
+            const real refraction_ratio = front_face ? 1.0f / material.dielectric.refraction_index : material.dielectric.refraction_index;
+            const Vec3 unit_normal = front_face ? point_unit_normal : -point_unit_normal;
+
+            const real cos_theta = -ray.direction * unit_normal;
+            const real sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
+            const u32 rng_seed = noise_1d(static_cast<u32>(1000000000.0f * sin_theta), RNG_SEED);
+            if (refraction_ratio * sin_theta > 1.0f || reflectance(cos_theta, refraction_ratio) > real_from_rng_seed(rng_seed)) {
+                scattered_ray.value.origin = point + 0.001 * unit_normal;
+                scattered_ray.value.direction = reflect(ray.direction, unit_normal);
+            } else {
+                scattered_ray.value.origin = point - 0.001 * unit_normal;
+                scattered_ray.value.direction = refract(ray.direction, unit_normal, refraction_ratio);
+            }
+
+            scattered_ray.valid = true;
+
+            return scattered_ray;
         }
 
         default: {
             assert(false);
-            return Maybe<Vec3>{};
+            return Maybe<Ray>{};
         }
     }
 }
@@ -308,18 +388,18 @@ static Colour intersect(Ray ray, const Scene& scene) {
             const int sphere_index = closest_sphere_intersection.value.index;
             const Sphere& sphere = scene.spheres[sphere_index];
             const Vec3 intersection_point = ray.origin + closest_sphere_intersection.value.distance * ray.direction;
-            const Vec3 sphere_unit_normal = normalise(intersection_point - sphere.centre);
+            const real sign = (sphere.radius < 0.0f) ? -1.0f : 1.0f;    // trick to model hollow spheres, don't want this polluting the scatter routine
+            const Vec3 sphere_unit_normal = sign * normalise(intersection_point - sphere.centre);
 
             const int sphere_material_index = scene.sphere_material_indices[sphere_index];
             const Material& sphere_material = scene.materials[sphere_material_index];
 
-            const Maybe<Vec3> scattered_ray_direction = scatter(ray.direction, intersection_point, sphere_unit_normal, sphere_material);
-            if (scattered_ray_direction.valid) {
-                ray.origin = intersection_point + 0.001 * sphere_unit_normal;
-                ray.direction = scattered_ray_direction.value;
+            const Maybe<Ray> scattered_ray = scatter(ray, intersection_point, sphere_unit_normal, sphere_material);
+            if (scattered_ray.valid) {
+                ray = scattered_ray.value;
 
-                const Colour& sphere_material_albedo = get_albedo(sphere_material);
-                attenuation *= sphere_material_albedo;
+                const Colour& sphere_material_colour = get_colour(sphere_material);
+                attenuation *= sphere_material_colour;
             } else {
                 colour = Colour{0.0f, 0.0f, 0.0f};
                 break;
@@ -335,7 +415,7 @@ static Colour intersect(Ray ray, const Scene& scene) {
 
 #include <Windows.h>
 
-LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, const WPARAM w_param, const LPARAM l_param) {
+static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, const WPARAM w_param, const LPARAM l_param) {
     assert(window != NULL);
 
     switch (message) {
@@ -432,20 +512,21 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     const Material materials[4] = {
         construct_lambertian_material(Colour{0.8f, 0.8f, 0.0f}),    // ground
-        construct_lambertian_material(Colour{0.7f, 0.3f, 0.3f}),    // middle
-        construct_metal_material(Colour{0.8f, 0.8f, 0.8f}, 0.3f),   // left
-        construct_metal_material(Colour{0.8f, 0.6f, 0.2f}, 1.0f)    // right
+        construct_lambertian_material(Colour{0.1f, 0.2f, 0.5f}),    // middle
+        construct_dielectric_material(1.5f),                        // left
+        construct_metal_material(Colour{0.8f, 0.6f, 0.2f}, 0.0f)    // right
     };
 
-    static constexpr int SPHERE_COUNT = 4;
+    static constexpr int SPHERE_COUNT = 5;
     static constexpr Sphere SPHERES[SPHERE_COUNT] = {
         Sphere{Vec3{0.0f, -100.5f, -1.0f}, 100.0f}, // ground
         Sphere{Vec3{0.0f, 0.0f, -1.0f}, 0.5f},      // middle
         Sphere{Vec3{-1.0f, 0.0f, -1.0f}, 0.5f},     // left
+        Sphere{Vec3{-1.0f, 0.0f, -1.0f}, -0.4f},    // left
         Sphere{Vec3{1.0f, 0.0f, -1.0f}, 0.5f}       // right
     };
 
-    static constexpr int SPHERE_MATERIAL_INDICES[SPHERE_COUNT] = {0, 1, 2, 3};
+    static constexpr int SPHERE_MATERIAL_INDICES[SPHERE_COUNT] = {0, 1, 2, 2, 3};
 
     const Scene scene{
         materials,
