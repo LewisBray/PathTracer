@@ -521,14 +521,21 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const real viewport_height = 2.0f * std::tan(0.5f * fov_y);
     const real viewport_width = ASPECT_RATIO * viewport_height;
 
-    static constexpr Vec3 camera_position{-2.0f, 2.0f, 1.0f};
+    static constexpr Vec3 camera_position{3.0f, 3.0f, 2.0f};
     static constexpr Vec3 camera_target{0.0f, 0.0f, -1.0f};
 
     const Vec3 camera_z = normalise(camera_position - camera_target);
     const Vec3 camera_x = normalise(Vec3{0.0f, 1.0f, 0.0f} ^ camera_z);
     const Vec3 camera_y = camera_z ^ camera_x;
 
-    const Vec3 bottom_left = camera_position - 0.5f * viewport_width * camera_x -0.5f * viewport_height * camera_y - camera_z;
+    static constexpr real APERTURE = 2.0f;
+    static constexpr real LENS_RADIUS = 0.5f * APERTURE;
+
+    const real focus_distance = magnitude(camera_position - camera_target);
+    const Vec3 step_x = focus_distance * viewport_width * camera_x;
+    const Vec3 step_y = focus_distance * viewport_height * camera_y;
+
+    const Vec3 bottom_left = camera_position - 0.5f * step_x - 0.5f * step_y - focus_distance * camera_z;
 
     const Material materials[4] = {
         construct_lambertian_material(Colour{0.8f, 0.8f, 0.0f}),    // ground
@@ -569,8 +576,21 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
                 const real v_randomness = real_from_rng_seed(v_rng_seed);
                 const real v = (static_cast<real>(row) + v_randomness) / static_cast<real>(CLIENT_HEIGHT - 1);
 
-                const Vec3 ray_direction = normalise(Vec3{bottom_left + u * viewport_width * camera_x + v * viewport_height * camera_y - camera_position});
-                const Ray ray{camera_position, ray_direction};
+                const u32 a_rng_seed = noise_3d(column, row, sample_index + 0, RNG_SEED);
+                const real a_randomness = real_from_rng_seed(a_rng_seed);
+                const real a = APERTURE * a_randomness - LENS_RADIUS;
+
+                const real b_max = std::sqrt(LENS_RADIUS * LENS_RADIUS - a * a);
+                const real b_min = -b_max;
+
+                const real b_rng_seed = noise_3d(column, row, sample_index + 1, RNG_SEED);
+                const real b_randomness = real_from_rng_seed(b_rng_seed);
+                const real b = (b_max - b_min) * b_randomness + b_min;
+
+                const Vec3 random_offset = a * camera_x + b * camera_y;
+
+                const Vec3 ray_direction = normalise(Vec3{bottom_left + u * step_x + v * step_y - camera_position - random_offset});
+                const Ray ray{camera_position + random_offset, ray_direction};
 
                 colour += intersect(ray, scene);
             }
