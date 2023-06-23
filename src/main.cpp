@@ -3,13 +3,14 @@
 #include <cmath>
 
 using u32 = unsigned int;
+using u64 = unsigned long long;
 
 using real = double;
 static constexpr real REAL_MAX = DBL_MAX;
 
 static u32 noise_1d(const int x, const u32 seed) {
-    static constexpr u32 BIT_NOISE_1 = 0x68E31DA4;
-    static constexpr u32 BIT_NOISE_2 = 0xB5297A4D;
+    static constexpr u32 BIT_NOISE_1 = 0xB5297A4D;
+    static constexpr u32 BIT_NOISE_2 = 0x68E31DA4;
     static constexpr u32 BIT_NOISE_3 = 0x1B56C4E9;
 
     u32 mangled = static_cast<u32>(x);
@@ -94,6 +95,7 @@ static Vec3 random_unit_vector(const Vec3 seed) {
     const real random_y = real_from_rng_seed(y_noise) - 0.5f;
     const real random_z = real_from_rng_seed(z_noise) - 0.5f;
     const Vec3 random_vector = Vec3{random_x, random_y, random_z};
+
     return normalise(random_vector);
 }
 
@@ -334,11 +336,13 @@ static Maybe<Ray> scatter(const Ray& ray, const Vec3& point, const Vec3& point_u
     assert(std::abs(magnitude(ray.direction) - 1.0f) < 1.0e-6);
     assert(std::abs(magnitude(point_unit_normal) - 1.0f) < 1.0e-6);
 
+    static constexpr real NUDGE_FACTOR = 0.001f;
+
     switch (material.type) {
         case Material::Type::LAMBERTIAN: {
-            const Vec3 random = random_unit_vector(point);
+            const Vec3 random = random_unit_vector(point_unit_normal);
             Maybe<Ray> scattered_ray = {};
-            scattered_ray.value.origin = point + 0.001 * point_unit_normal;
+            scattered_ray.value.origin = point + NUDGE_FACTOR * point_unit_normal;
             scattered_ray.value.direction = normalise(point_unit_normal + random);
             scattered_ray.valid = true;
             
@@ -347,9 +351,9 @@ static Maybe<Ray> scatter(const Ray& ray, const Vec3& point, const Vec3& point_u
 
         case Material::Type::METAL: {
             Maybe<Ray> scattered_ray = {};
-            const Vec3 random = random_unit_vector(point);
+            const Vec3 random = random_unit_vector(point_unit_normal);
             const real fuzziness = material.metal.fuzziness;
-            scattered_ray.value.origin = point + 0.001 * point_unit_normal;
+            scattered_ray.value.origin = point + NUDGE_FACTOR * point_unit_normal;
             scattered_ray.value.direction = normalise(reflect(ray.direction, point_unit_normal) + fuzziness * random);
             scattered_ray.valid = (scattered_ray.value.direction * point_unit_normal > 0.0f);
             
@@ -366,10 +370,10 @@ static Maybe<Ray> scatter(const Ray& ray, const Vec3& point, const Vec3& point_u
             const real sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
             const u32 rng_seed = noise_1d(static_cast<u32>(1000000000.0f * sin_theta), RNG_SEED);
             if (refraction_ratio * sin_theta > 1.0f || reflectance(cos_theta, refraction_ratio) > real_from_rng_seed(rng_seed)) {
-                scattered_ray.value.origin = point + 0.001 * unit_normal;
+                scattered_ray.value.origin = point + NUDGE_FACTOR * unit_normal;
                 scattered_ray.value.direction = reflect(ray.direction, unit_normal);
             } else {
-                scattered_ray.value.origin = point - 0.001 * unit_normal;
+                scattered_ray.value.origin = point - NUDGE_FACTOR * unit_normal;
                 scattered_ray.value.direction = refract(ray.direction, unit_normal, refraction_ratio);
             }
 
@@ -421,6 +425,14 @@ static Colour intersect(Ray ray, const Scene& scene) {
     return colour;
 }
 
+static u32 random_number(u32 seed) {
+    seed ^= (seed << 13);
+    seed ^= (seed >> 17);
+    seed ^= (seed << 5);
+
+    return seed;
+}
+
 #include <Windows.h>
 
 static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, const WPARAM w_param, const LPARAM l_param) {
@@ -436,6 +448,35 @@ static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, 
             return DefWindowProcW(window, message, w_param, l_param);
         }
     }
+}
+
+void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixel_byte_count) {
+    const HANDLE file_handle = CreateFileA(
+        "pixels.bin",
+        GENERIC_WRITE,
+        0,
+        nullptr,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    assert(file_handle != INVALID_HANDLE_VALUE);
+
+    // swap r and b around for dumping as binary file
+    for (u32 byte_index = 0; byte_index < pixel_byte_count; byte_index += 4) {
+        const unsigned char temp = pixels[byte_index + 0];
+        pixels[byte_index + 0] = pixels[byte_index + 2];
+        pixels[byte_index + 2] = temp;
+    }
+
+    DWORD bytes_written = 0;
+    const BOOL wrote_to_file = WriteFile(file_handle, pixels, pixel_byte_count, &bytes_written, nullptr);
+    assert(wrote_to_file != FALSE);
+    assert(bytes_written == pixel_byte_count);
+
+    const BOOL closed_handle = CloseHandle(file_handle);
+    assert(closed_handle != FALSE);
 }
 
 int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
@@ -458,8 +499,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const ATOM atom = RegisterClassW(&window_class);
     assert(atom != 0);
 
-    static constexpr real ASPECT_RATIO = 16.0f / 9.0f;
-    static constexpr int CLIENT_WIDTH = 400;
+    static constexpr real ASPECT_RATIO = 3.0f / 2.0f;
+    static constexpr int CLIENT_WIDTH = 1200;
     static constexpr int CLIENT_HEIGHT = static_cast<int>(static_cast<real>(CLIENT_WIDTH) / ASPECT_RATIO);
 
     static constexpr DWORD WINDOW_STYLE = WS_CAPTION | WS_SYSMENU;
@@ -509,7 +550,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     bitmap_info.bmiHeader.biClrUsed = 0;
     bitmap_info.bmiHeader.biClrImportant = 0;
 
-    unsigned char* pixels = static_cast<unsigned char*>(VirtualAlloc(0, 4 * CLIENT_WIDTH * CLIENT_HEIGHT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    static constexpr u32 PIXEL_BYTE_COUNT = 4 * CLIENT_WIDTH * CLIENT_HEIGHT;
+    unsigned char* pixels = static_cast<unsigned char*>(VirtualAlloc(0, PIXEL_BYTE_COUNT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(pixels != nullptr);
 
     static constexpr real FOV_Y_DEGREES = 20.0f;
@@ -521,48 +563,119 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const real viewport_height = 2.0f * std::tan(0.5f * fov_y);
     const real viewport_width = ASPECT_RATIO * viewport_height;
 
-    static constexpr Vec3 camera_position{3.0f, 3.0f, 2.0f};
-    static constexpr Vec3 camera_target{0.0f, 0.0f, -1.0f};
+    static constexpr Vec3 camera_position{13.0f, 2.0f, 3.0f};
+    static constexpr Vec3 camera_target{0.0f, 0.0f, 0.0f};
 
     const Vec3 camera_z = normalise(camera_position - camera_target);
     const Vec3 camera_x = normalise(Vec3{0.0f, 1.0f, 0.0f} ^ camera_z);
     const Vec3 camera_y = camera_z ^ camera_x;
 
-    static constexpr real APERTURE = 2.0f;
+    static constexpr real APERTURE = 0.1f;
     static constexpr real LENS_RADIUS = 0.5f * APERTURE;
 
-    const real focus_distance = magnitude(camera_position - camera_target);
+    const real focus_distance = 10.0f;
     const Vec3 step_x = focus_distance * viewport_width * camera_x;
     const Vec3 step_y = focus_distance * viewport_height * camera_y;
 
     const Vec3 bottom_left = camera_position - 0.5f * step_x - 0.5f * step_y - focus_distance * camera_z;
 
-    const Material materials[4] = {
-        construct_lambertian_material(Colour{0.8f, 0.8f, 0.0f}),    // ground
-        construct_lambertian_material(Colour{0.1f, 0.2f, 0.5f}),    // middle
-        construct_dielectric_material(1.5f),                        // left
-        construct_metal_material(Colour{0.8f, 0.6f, 0.2f}, 0.0f)    // right
-    };
+    static constexpr int SPHERE_COUNT = 22 * 22 + 4;
+    Material materials[SPHERE_COUNT] = {};
+    Sphere spheres[SPHERE_COUNT] = {};
+    int sphere_material_indices[SPHERE_COUNT] = {};
 
-    static constexpr int SPHERE_COUNT = 5;
-    static constexpr Sphere SPHERES[SPHERE_COUNT] = {
-        Sphere{Vec3{0.0f, -100.5f, -1.0f}, 100.0f}, // ground
-        Sphere{Vec3{0.0f, 0.0f, -1.0f}, 0.5f},      // middle
-        Sphere{Vec3{-1.0f, 0.0f, -1.0f}, 0.5f},     // left
-        Sphere{Vec3{-1.0f, 0.0f, -1.0f}, -0.4f},    // left
-        Sphere{Vec3{1.0f, 0.0f, -1.0f}, 0.5f}       // right
-    };
+    int sphere_index = 0;
+    materials[sphere_index] = construct_lambertian_material(Colour{0.5f, 0.5f, 0.5f});
+    spheres[sphere_index] = Sphere{Vec3{0.0f, -1000.0f, 0.0f}, 1000.0f};
+    sphere_material_indices[sphere_index] = sphere_index;
+    ++sphere_index;
 
-    static constexpr int SPHERE_MATERIAL_INDICES[SPHERE_COUNT] = {0, 1, 2, 2, 3};
+    u32 rand_seed = 479001599;
+    for (int a = -11; a < 11; ++a) {
+        for (int b = -11; b < 11; ++b) {
+            rand_seed = random_number(rand_seed);
+            const real material_choice = real_from_rng_seed(rand_seed);
+
+            rand_seed = random_number(rand_seed);
+            const real x_offset = 0.9f * real_from_rng_seed(rand_seed);
+
+            rand_seed = random_number(rand_seed);
+            const real z_offset = 0.9f * real_from_rng_seed(rand_seed);
+
+            const Vec3 sphere_centre{static_cast<real>(a) + x_offset, 0.2f, static_cast<real>(b) + z_offset};
+            spheres[sphere_index] = Sphere{sphere_centre, 0.2f};
+
+            if (material_choice < 0.8f) {
+                rand_seed = random_number(rand_seed);
+                const real colour_1_r = real_from_rng_seed(rand_seed);
+                rand_seed = random_number(rand_seed);
+                const real colour_1_g = real_from_rng_seed(rand_seed);
+                rand_seed = random_number(rand_seed);
+                const real colour_1_b = real_from_rng_seed(rand_seed);
+
+                const Colour colour_1{colour_1_r, colour_1_g, colour_1_b};
+
+                rand_seed = random_number(rand_seed);
+                const real colour_2_r = real_from_rng_seed(rand_seed);
+                rand_seed = random_number(rand_seed);
+                const real colour_2_g = real_from_rng_seed(rand_seed);
+                rand_seed = random_number(rand_seed);
+                const real colour_2_b = real_from_rng_seed(rand_seed);
+
+                const Colour colour_2{colour_2_r, colour_2_g, colour_2_b};
+
+                const Colour albedo = colour_1 * colour_2;
+                materials[sphere_index] = construct_lambertian_material(albedo);
+            } else if (material_choice < 0.95f) {
+                rand_seed = random_number(rand_seed);
+                const real colour_r = 0.5f * real_from_rng_seed(rand_seed) + 0.5f;
+                rand_seed = random_number(rand_seed);
+                const real colour_g = 0.5f * real_from_rng_seed(rand_seed) + 0.5f;
+                rand_seed = random_number(rand_seed);
+                const real colour_b = 0.5f * real_from_rng_seed(rand_seed) + 0.5f;                
+
+                const Colour albedo{colour_r, colour_g, colour_b};
+
+                rand_seed = random_number(rand_seed);
+                const real fuzziness = real_from_rng_seed(rand_seed);                
+
+                materials[sphere_index] = construct_metal_material(albedo, fuzziness);
+            } else {
+                materials[sphere_index] = construct_dielectric_material(1.5f);
+            }
+
+            sphere_material_indices[sphere_index] = sphere_index;
+            ++sphere_index;
+        }
+    }
+
+    assert(sphere_index == SPHERE_COUNT - 3);
+
+    materials[sphere_index] = construct_dielectric_material(1.5f);
+    spheres[sphere_index] = Sphere{Vec3{0.0f, 1.0f, 0.0f}, 1.0f};
+    sphere_material_indices[sphere_index] = sphere_index;
+    ++sphere_index;
+
+    materials[sphere_index] = construct_lambertian_material(Colour{0.4f, 0.2f, 0.1f});
+    spheres[sphere_index] = Sphere{Vec3{-4.0f, 1.0f, 0.0f}, 1.0f};
+    sphere_material_indices[sphere_index] = sphere_index;
+    ++sphere_index;
+
+    materials[sphere_index] = construct_metal_material(Colour{0.7f, 0.6f, 0.5f}, 0.0f);
+    spheres[sphere_index] = Sphere{Vec3{4.0f, 1.0f, 0.0f}, 1.0f};
+    sphere_material_indices[sphere_index] = sphere_index;
+    ++sphere_index;
+
+    assert(sphere_index == SPHERE_COUNT);
 
     const Scene scene{
         materials,
-        SPHERES,
-        SPHERE_MATERIAL_INDICES,
+        spheres,
+        sphere_material_indices,
         SPHERE_COUNT
     };
 
-    static constexpr int SAMPLES_PER_PIXEL = 100;
+    static constexpr int SAMPLES_PER_PIXEL = 500;
 
     for (int row = 0; row < CLIENT_HEIGHT; ++row) {
         for (int column = 0; column < CLIENT_WIDTH; ++column) {
@@ -606,7 +719,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
             pixels[index + 0] = static_cast<unsigned char>(255.0f * colour.b);
             pixels[index + 1] = static_cast<unsigned char>(255.0f * colour.g);
             pixels[index + 2] = static_cast<unsigned char>(255.0f * colour.r);
-            pixels[index + 3] = 0;
+            pixels[index + 3] = 255;
         }
     }
 
