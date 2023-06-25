@@ -128,9 +128,9 @@ static Maybe<SphereIntersections> intersect(const Ray& ray, const Sphere& sphere
     const Vec3 ray_origin_to_sphere_centre = sphere.centre - ray.origin;
     const real intersections_mid_point_distance = ray_origin_to_sphere_centre * ray.direction;
 
-    const real ray_start_to_sphere_centre_distance_squared = ray_origin_to_sphere_centre * ray_origin_to_sphere_centre;
+    const real ray_origin_to_sphere_centre_distance_squared = ray_origin_to_sphere_centre * ray_origin_to_sphere_centre;
     const real intersections_mid_point_distance_squared = intersections_mid_point_distance * intersections_mid_point_distance;
-    const real sphere_centre_to_intersections_mid_point_squared = ray_start_to_sphere_centre_distance_squared - intersections_mid_point_distance_squared;
+    const real sphere_centre_to_intersections_mid_point_squared = ray_origin_to_sphere_centre_distance_squared - intersections_mid_point_distance_squared;
     const real sphere_radius_squared = sphere.radius * sphere.radius;
     const real intersections_mid_point_to_intersections_distance_squared = sphere_radius_squared - sphere_centre_to_intersections_mid_point_squared;
     if (intersections_mid_point_to_intersections_distance_squared < 0.0f) {
@@ -450,7 +450,7 @@ static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, 
     }
 }
 
-void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixel_byte_count) {
+static void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixel_byte_count) {
     const HANDLE file_handle = CreateFileA(
         "pixels.bin",
         GENERIC_WRITE,
@@ -479,6 +479,150 @@ void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixel_byte_
     assert(closed_handle != FALSE);
 }
 
+static constexpr real PI = 3.14159265358979323846264f;
+
+// app settings
+static constexpr real ASPECT_RATIO = 3.0f / 2.0f;
+static constexpr real FOV_Y_DEGREES = 20.0f;
+static constexpr real APERTURE = 0.1f;
+static constexpr int SAMPLES_PER_PIXEL = 500;
+static constexpr Vec3 CAMERA_POSITION{13.0f, 2.0f, 3.0f};
+static constexpr Vec3 CAMERA_TARGET{0.0f, 0.0f, 0.0f};
+static constexpr int CLIENT_WIDTH = 1200;
+
+static constexpr real LENS_RADIUS = 0.5f * APERTURE;
+static constexpr int CLIENT_HEIGHT = static_cast<int>(static_cast<real>(CLIENT_WIDTH) / ASPECT_RATIO);
+
+struct RenderWorkQueue {
+    struct Entry {
+        int row;
+        Scene scene;
+        Vec3 camera_x;
+        Vec3 camera_y;
+        Vec3 bottom_left;
+        Vec3 step_x;
+        Vec3 step_y;
+        unsigned char* pixels;
+    };
+
+    static constexpr int CAPACITY = CLIENT_HEIGHT;
+    Entry entries[CAPACITY];
+    volatile LONG entry_count;
+    volatile LONG next_entry_to_do_index;
+    volatile LONG completed_entry_count;
+    HANDLE semaphore;
+};
+
+static void push_entry(RenderWorkQueue& work_queue, const RenderWorkQueue::Entry& entry) {
+    assert(work_queue.entry_count < work_queue.CAPACITY);
+
+    work_queue.entries[work_queue.entry_count] = entry;
+
+    _mm_sfence();
+    ++work_queue.entry_count;
+    ReleaseSemaphore(work_queue.semaphore, 1, nullptr);
+}
+
+static void render_scanline(
+    const int row,
+    const Scene& scene,
+    const Vec3& camera_x,
+    const Vec3& camera_y,
+    const Vec3& bottom_left,
+    const Vec3& step_x,
+    const Vec3& step_y,
+    unsigned char* const pixels
+) {
+    for (int column = 0; column < CLIENT_WIDTH; ++column) {
+        Colour colour = {};
+        for (int sample_index = 0; sample_index < SAMPLES_PER_PIXEL; ++sample_index) {
+            const u32 u_rng_seed = noise_3d(row, column, sample_index + 0, RNG_SEED);
+            const real u_randomness = real_from_rng_seed(u_rng_seed);
+            const real u = (static_cast<real>(column) + u_randomness) / static_cast<real>(CLIENT_WIDTH - 1);
+
+            const u32 v_rng_seed = noise_3d(row, column, sample_index + 1, RNG_SEED);
+            const real v_randomness = real_from_rng_seed(v_rng_seed);
+            const real v = (static_cast<real>(row) + v_randomness) / static_cast<real>(CLIENT_HEIGHT - 1);
+
+            const u32 a_rng_seed = noise_3d(column, row, sample_index + 0, RNG_SEED);
+            const real a_randomness = real_from_rng_seed(a_rng_seed);
+            const real a = APERTURE * a_randomness - LENS_RADIUS;
+
+            const real b_max = std::sqrt(LENS_RADIUS * LENS_RADIUS - a * a);
+            const real b_min = -b_max;
+
+            const real b_rng_seed = noise_3d(column, row, sample_index + 1, RNG_SEED);
+            const real b_randomness = real_from_rng_seed(b_rng_seed);
+            const real b = (b_max - b_min) * b_randomness + b_min;
+
+            const Vec3 random_offset = a * camera_x + b * camera_y;
+
+            const Vec3 ray_direction = normalise(Vec3{bottom_left + u * step_x + v * step_y - CAMERA_POSITION - random_offset});
+            const Ray ray{CAMERA_POSITION + random_offset, ray_direction};
+
+            colour += intersect(ray, scene);
+        }
+
+        colour /= static_cast<real>(SAMPLES_PER_PIXEL);
+
+        // gamma correct
+        colour.r = std::sqrt(colour.r);
+        colour.g = std::sqrt(colour.g);
+        colour.b = std::sqrt(colour.b);
+
+        const int index = 4 * (row * CLIENT_WIDTH + column);
+        pixels[index + 0] = static_cast<unsigned char>(255.0f * colour.b);
+        pixels[index + 1] = static_cast<unsigned char>(255.0f * colour.g);
+        pixels[index + 2] = static_cast<unsigned char>(255.0f * colour.r);
+        pixels[index + 3] = 255;
+    }
+}
+
+static bool process_work_queue_entry(RenderWorkQueue& work_queue) {
+    bool had_entry_to_process = false;
+
+    const LONG original_entry_to_do_index = work_queue.next_entry_to_do_index;
+    if (original_entry_to_do_index < work_queue.entry_count) {
+        const LONG entry_to_do_index = InterlockedCompareExchange(&work_queue.next_entry_to_do_index, original_entry_to_do_index + 1, original_entry_to_do_index);
+        if (entry_to_do_index == original_entry_to_do_index) {
+            const RenderWorkQueue::Entry& entry_to_do = work_queue.entries[entry_to_do_index];
+            render_scanline(
+                entry_to_do.row,
+                entry_to_do.scene,
+                entry_to_do.camera_x,
+                entry_to_do.camera_y,
+                entry_to_do.bottom_left,
+                entry_to_do.step_x,
+                entry_to_do.step_y,
+                entry_to_do.pixels
+            );
+
+            InterlockedIncrement(&work_queue.completed_entry_count);
+            ReleaseSemaphore(work_queue.semaphore, 1, nullptr);
+            had_entry_to_process = true;
+        }
+    }
+
+    return had_entry_to_process;
+}
+
+static bool work_in_progress(const RenderWorkQueue& work_queue) {
+    return (work_queue.completed_entry_count != work_queue.entry_count);
+}
+
+static DWORD thread_proc(const LPVOID parameter) {
+    RenderWorkQueue* const work_queue = static_cast<RenderWorkQueue*>(parameter);
+
+    while (true) {
+        const bool had_entry_to_process = process_work_queue_entry(*work_queue);
+        if (!had_entry_to_process) {
+            WaitForSingleObject(work_queue->semaphore, INFINITE);
+        }
+    }
+
+    return 0;
+}
+
 int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     static constexpr const wchar_t* WINDOW_CLASS_NAME = L"Main Window";
 
@@ -498,10 +642,6 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     const ATOM atom = RegisterClassW(&window_class);
     assert(atom != 0);
-
-    static constexpr real ASPECT_RATIO = 3.0f / 2.0f;
-    static constexpr int CLIENT_WIDTH = 1200;
-    static constexpr int CLIENT_HEIGHT = static_cast<int>(static_cast<real>(CLIENT_WIDTH) / ASPECT_RATIO);
 
     static constexpr DWORD WINDOW_STYLE = WS_CAPTION | WS_SYSMENU;
 
@@ -551,33 +691,42 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     bitmap_info.bmiHeader.biClrImportant = 0;
 
     static constexpr u32 PIXEL_BYTE_COUNT = 4 * CLIENT_WIDTH * CLIENT_HEIGHT;
-    unsigned char* pixels = static_cast<unsigned char*>(VirtualAlloc(0, PIXEL_BYTE_COUNT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    unsigned char* const pixels = static_cast<unsigned char*>(VirtualAlloc(0, PIXEL_BYTE_COUNT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(pixels != nullptr);
 
-    static constexpr real FOV_Y_DEGREES = 20.0f;
-    static constexpr real FOCAL_LENGTH = 1.0f;
+    LARGE_INTEGER tick_frequency = {};
+    const BOOL queried_performance_frequency = QueryPerformanceFrequency(&tick_frequency);
+    assert(queried_performance_frequency != FALSE);
 
-    static constexpr real PI = 3.14159265358979323846264f;
+    SYSTEM_INFO system_info = {};
+    GetSystemInfo(&system_info);
 
-    const real fov_y = FOV_Y_DEGREES / 180.0f * PI;
-    const real viewport_height = 2.0f * std::tan(0.5f * fov_y);
+    const DWORD core_count = system_info.dwNumberOfProcessors;
+    assert(core_count > 0);
+    const DWORD thread_count = core_count - 1;
+
+    RenderWorkQueue work_queue = {};
+    work_queue.semaphore = CreateSemaphoreA(nullptr, 0, thread_count, nullptr);
+
+    for (DWORD thread_index = 0; thread_index < thread_count; ++thread_index) {
+        DWORD thread_id = 0;
+        const HANDLE thread_handle = CreateThread(nullptr, 0, thread_proc, static_cast<LPVOID>(&work_queue), 0, &thread_id);
+        CloseHandle(thread_handle);
+    }
+
+    static constexpr real FOV_Y = FOV_Y_DEGREES / 180.0f * PI;
+    const real viewport_height = 2.0f * std::tan(0.5f * FOV_Y);
     const real viewport_width = ASPECT_RATIO * viewport_height;
 
-    static constexpr Vec3 camera_position{13.0f, 2.0f, 3.0f};
-    static constexpr Vec3 camera_target{0.0f, 0.0f, 0.0f};
-
-    const Vec3 camera_z = normalise(camera_position - camera_target);
+    const Vec3 camera_z = normalise(CAMERA_POSITION - CAMERA_TARGET);
     const Vec3 camera_x = normalise(Vec3{0.0f, 1.0f, 0.0f} ^ camera_z);
     const Vec3 camera_y = camera_z ^ camera_x;
-
-    static constexpr real APERTURE = 0.1f;
-    static constexpr real LENS_RADIUS = 0.5f * APERTURE;
 
     const real focus_distance = 10.0f;
     const Vec3 step_x = focus_distance * viewport_width * camera_x;
     const Vec3 step_y = focus_distance * viewport_height * camera_y;
 
-    const Vec3 bottom_left = camera_position - 0.5f * step_x - 0.5f * step_y - focus_distance * camera_z;
+    const Vec3 bottom_left = CAMERA_POSITION - 0.5f * step_x - 0.5f * step_y - focus_distance * camera_z;
 
     static constexpr int SPHERE_COUNT = 22 * 22 + 4;
     Material materials[SPHERE_COUNT] = {};
@@ -675,53 +824,33 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         SPHERE_COUNT
     };
 
-    static constexpr int SAMPLES_PER_PIXEL = 500;
+    LARGE_INTEGER render_start_time = {};
+    const BOOL read_start_time = QueryPerformanceCounter(&render_start_time);
+    assert(read_start_time != FALSE);
 
     for (int row = 0; row < CLIENT_HEIGHT; ++row) {
-        for (int column = 0; column < CLIENT_WIDTH; ++column) {
-            Colour colour = {};
-            for (int sample_index = 0; sample_index < SAMPLES_PER_PIXEL; ++sample_index) {
-                const u32 u_rng_seed = noise_3d(row, column, sample_index + 0, RNG_SEED);
-                const real u_randomness = real_from_rng_seed(u_rng_seed);
-                const real u = (static_cast<real>(column) + u_randomness) / static_cast<real>(CLIENT_WIDTH - 1);
+        RenderWorkQueue::Entry entry = {};
+        entry.row = row;
+        entry.scene = scene;
+        entry.camera_x = camera_x;
+        entry.camera_y = camera_y;
+        entry.bottom_left = bottom_left;
+        entry.step_x = step_x;
+        entry.step_y = step_y;
+        entry.pixels = pixels;
 
-                const u32 v_rng_seed = noise_3d(row, column, sample_index + 1, RNG_SEED);
-                const real v_randomness = real_from_rng_seed(v_rng_seed);
-                const real v = (static_cast<real>(row) + v_randomness) / static_cast<real>(CLIENT_HEIGHT - 1);
-
-                const u32 a_rng_seed = noise_3d(column, row, sample_index + 0, RNG_SEED);
-                const real a_randomness = real_from_rng_seed(a_rng_seed);
-                const real a = APERTURE * a_randomness - LENS_RADIUS;
-
-                const real b_max = std::sqrt(LENS_RADIUS * LENS_RADIUS - a * a);
-                const real b_min = -b_max;
-
-                const real b_rng_seed = noise_3d(column, row, sample_index + 1, RNG_SEED);
-                const real b_randomness = real_from_rng_seed(b_rng_seed);
-                const real b = (b_max - b_min) * b_randomness + b_min;
-
-                const Vec3 random_offset = a * camera_x + b * camera_y;
-
-                const Vec3 ray_direction = normalise(Vec3{bottom_left + u * step_x + v * step_y - camera_position - random_offset});
-                const Ray ray{camera_position + random_offset, ray_direction};
-
-                colour += intersect(ray, scene);
-            }
-
-            colour /= static_cast<real>(SAMPLES_PER_PIXEL);
-
-            // gamma correct
-            colour.r = std::sqrt(colour.r);
-            colour.g = std::sqrt(colour.g);
-            colour.b = std::sqrt(colour.b);
-
-            const int index = 4 * (row * CLIENT_WIDTH + column);
-            pixels[index + 0] = static_cast<unsigned char>(255.0f * colour.b);
-            pixels[index + 1] = static_cast<unsigned char>(255.0f * colour.g);
-            pixels[index + 2] = static_cast<unsigned char>(255.0f * colour.r);
-            pixels[index + 3] = 255;
-        }
+        push_entry(work_queue, entry);
     }
+
+    while (work_in_progress(work_queue)) {
+        process_work_queue_entry(work_queue);
+    }
+
+    LARGE_INTEGER render_finish_time = {};
+    const BOOL read_finish_time = QueryPerformanceCounter(&render_finish_time);
+    assert(read_finish_time != FALSE);
+
+    const real render_duration = static_cast<real>(render_finish_time.QuadPart - render_start_time.QuadPart) / static_cast<real>(tick_frequency.QuadPart);
 
     bool quit = false;
     while (!quit) {
