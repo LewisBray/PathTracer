@@ -31,20 +31,23 @@ static real real_from_rng(const u32 rng) {
     return static_cast<real>(rng) / static_cast<real>(UINT_MAX);
 }
 
-static Vec3 unit_vector_from_noise(const Vec3& seed) {
+static Vec3 random_unit_vector(const Vec3& seed) {
     const int x = static_cast<int>(1000000000.0f * seed.x);
     const int y = static_cast<int>(1000000000.0f * seed.y);
     const int z = static_cast<int>(1000000000.0f * seed.z);
 
-    const u32 x_noise = noise_1d(x);
-    const u32 y_noise = noise_1d(y);
-    const u32 z_noise = noise_1d(z);
+    u32 rng = noise_3d(x, y, z);
 
-    const real random_x = real_from_rng(x_noise) - 0.5f;
-    const real random_y = real_from_rng(y_noise) - 0.5f;
-    const real random_z = real_from_rng(z_noise) - 0.5f;
+    rng = random_number(rng);
+    const real random_x = real_from_rng(rng) - 0.5f;
+
+    rng = random_number(rng);
+    const real random_y = real_from_rng(rng) - 0.5f;
+
+    rng = random_number(rng);
+    const real random_z = real_from_rng(rng) - 0.5f;
+
     const Vec3 random_vector = Vec3{random_x, random_y, random_z};
-
     return normalise(random_vector);
 }
 

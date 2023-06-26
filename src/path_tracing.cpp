@@ -39,10 +39,11 @@ static Maybe<Ray> scatter(const Ray& ray, const Material& material, const Vec3& 
 
     switch (material.type) {
         case Material::Type::LAMBERTIAN: {
-            const Vec3 random = unit_vector_from_noise(point_unit_normal);
             Maybe<Ray> scattered_ray = {};
+            const Vec3 random = random_unit_vector(point_unit_normal);
+            const real sign = (random * point_unit_normal < 0.0f) ? -1.0f : 1.0f;
             scattered_ray.value.origin = point + NUDGE_FACTOR * point_unit_normal;
-            scattered_ray.value.direction = normalise(point_unit_normal + random);
+            scattered_ray.value.direction = sign * random;
             scattered_ray.is_valid = true;
             
             return scattered_ray;
@@ -50,10 +51,11 @@ static Maybe<Ray> scatter(const Ray& ray, const Material& material, const Vec3& 
 
         case Material::Type::METAL: {
             Maybe<Ray> scattered_ray = {};
-            const Vec3 random = unit_vector_from_noise(point_unit_normal);
+            const Vec3 random = random_unit_vector(point_unit_normal);
             const real fuzziness = material.metal.fuzziness;
+            const Vec3 reflected_direction = reflect(ray.direction, point_unit_normal);
             scattered_ray.value.origin = point + NUDGE_FACTOR * point_unit_normal;
-            scattered_ray.value.direction = normalise(reflect(ray.direction, point_unit_normal) + fuzziness * random);
+            scattered_ray.value.direction = normalise(reflected_direction + fuzziness * random);
             scattered_ray.is_valid = (scattered_ray.value.direction * point_unit_normal > 0.0f);
             
             return scattered_ray;
