@@ -240,7 +240,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const HWND window = CreateWindowExW(
         0,
         WINDOW_CLASS_NAME,
-        L"PBR Ray Tracer",
+        L"Path Tracer",
         WINDOW_STYLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
