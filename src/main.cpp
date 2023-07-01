@@ -15,9 +15,11 @@
 #include "bvh.cpp"
 #include "rng.cpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cfloat>
 
+#define NOMINMAX
 #include <Windows.h>
 
 static constexpr real PI = 3.14159265358979323846264f;
@@ -112,9 +114,9 @@ static void render_scanline(
         colour.b = std::sqrt(colour.b);
 
         const int index = 4 * (row * CLIENT_WIDTH + column);
-        pixels[index + 0] = static_cast<unsigned char>(255.0f * colour.b);
-        pixels[index + 1] = static_cast<unsigned char>(255.0f * colour.g);
-        pixels[index + 2] = static_cast<unsigned char>(255.0f * colour.r);
+        pixels[index + 0] = static_cast<unsigned char>(255.0f * std::min<real>(colour.b, 1.0f));
+        pixels[index + 1] = static_cast<unsigned char>(255.0f * std::min<real>(colour.g, 1.0f));
+        pixels[index + 2] = static_cast<unsigned char>(255.0f * std::min<real>(colour.r, 1.0f));
         pixels[index + 3] = 255;
     }
 }

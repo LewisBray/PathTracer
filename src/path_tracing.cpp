@@ -85,6 +85,11 @@ static Maybe<Ray> scatter(const Ray& ray, const Material& material, const Vec3& 
             return scattered_ray;
         }
 
+        case Material::Type::DIFFUSE_LIGHT: {
+            Maybe<Ray> scattered_ray = {};
+            return scattered_ray;
+        }
+
         default: {
             assert(false);
             return Maybe<Ray>{};
@@ -146,19 +151,21 @@ static Colour intersect(Ray ray, const Scene& scene) {
             const Sphere& sphere = scene.spheres[sphere_index];
             const Vec3 intersection_point = ray.origin + closest_sphere_intersection.distance * ray.direction;
             const real sign = (sphere.radius < 0.0f) ? -1.0f : 1.0f;    // trick to model hollow spheres, don't want this polluting the scatter routine
-            const Vec3 sphere_unit_normal = sign * normalise(intersection_point - sphere.centre);
+            const Vec3 sphere_unit_normal = sign * normalise(intersection_point - sphere.centre);   // TODO: can divide by radius instead
 
             const int sphere_material_index = scene.sphere_material_indices[sphere_index];
             const Material& sphere_material = scene.materials[sphere_material_index];
+            const Colour sphere_material_emission = get_emission(sphere_material);
 
             const Maybe<Ray> scattered_ray = scatter(ray, sphere_material, intersection_point, sphere_unit_normal);
             if (scattered_ray.is_valid) {
                 ray = scattered_ray.value;
 
                 const Colour& sphere_material_colour = get_colour(sphere_material);
+                colour += attenuation * sphere_material_emission;
                 attenuation *= sphere_material_colour;
             } else {
-                colour = Colour{0.0f, 0.0f, 0.0f};
+                colour = sphere_material_emission;
                 break;
             }
         } else {

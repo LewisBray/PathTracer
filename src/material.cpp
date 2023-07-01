@@ -27,6 +27,15 @@ static Material construct_dielectric_material(const real refraction_index) {
     return material;
 }
 
+static Material construct_diffuse_light_material(const Colour& emission_colour, const real emission_power) {
+    Material material = {};
+    material.diffuse_light.emission_colour = emission_colour;
+    material.diffuse_light.emission_power = emission_power;
+    material.type = Material::Type::DIFFUSE_LIGHT;
+
+    return material;
+}
+
 static Colour get_colour(const Material& material) {
     switch (material.type) {
         case Material::Type::LAMBERTIAN: {
@@ -39,6 +48,29 @@ static Colour get_colour(const Material& material) {
 
         case Material::Type::DIELECTRIC: {
             return Colour{1.0f, 1.0f, 1.0f};
+        }
+
+        case Material::Type::DIFFUSE_LIGHT: {
+            return Colour{0.0f, 0.0f, 0.0f};
+        }
+
+        default: {
+            assert(false);
+            return Colour{0.0f, 0.0f, 0.0f};
+        }
+    }
+}
+
+static Colour get_emission(const Material& material) {
+    switch (material.type) {
+        case Material::Type::LAMBERTIAN:    // fallthrough
+        case Material::Type::METAL:         // fallthrough
+        case Material::Type::DIELECTRIC: {
+            return Colour{0.0f, 0.0f, 0.0f};
+        }
+
+        case Material::Type::DIFFUSE_LIGHT: {
+            return material.diffuse_light.emission_power * material.diffuse_light.emission_colour;
         }
 
         default: {
