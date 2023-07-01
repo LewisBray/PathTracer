@@ -1,4 +1,5 @@
 #include "path_tracing.h"
+#include "bvh.h"
 
 #include <cassert>
 #include <cmath>
@@ -23,7 +24,7 @@ static Vec3 refract(const Vec3& direction, const Vec3& unit_normal, const real r
 }
 
 // Uses Schlick's approximation of reflectance
-static double reflectance(const real cos_theta, const real refraction_ratio) {
+static real reflectance(const real cos_theta, const real refraction_ratio) {
     const real ratio = (1.0f - refraction_ratio) / (1.0f + refraction_ratio);
     const real r0 = ratio * ratio;
     const real difference = (1.0f - cos_theta);
@@ -96,17 +97,54 @@ static Colour background_gradient(const Ray& ray) {
     return (1.0f - t) * Colour{1.0, 1.0, 1.0} + t * Colour{0.5, 0.7, 1.0};
 }
 
+struct ClosestSphereIntersection {
+    int index;
+    real distance;
+};
+
+static constexpr ClosestSphereIntersection MISS{-1, REAL_MAX};
+
+static ClosestSphereIntersection intersect(const Ray& ray, const BVH& bvh, const int node_index, const Sphere* const spheres) {
+    const Node& node = bvh[node_index];
+    const AABBIntersections aabb_intersections = intersect(ray, node.aabb);
+    if (aabb_intersections.max_distance < 0.0f || aabb_intersections.min_distance > aabb_intersections.max_distance) {
+        return MISS;
+    }
+
+    if (node.left == 0 && node.right == 0) {
+        const Sphere& sphere = spheres[node.index];
+        const Maybe<SphereIntersections> sphere_intersections = intersect(ray, sphere);
+        ClosestSphereIntersection sphere_intersection = MISS;
+        if (sphere_intersections.is_valid && (sphere_intersections.value.min_distance > 0.0f || sphere_intersections.value.max_distance > 0.0f)) {
+            sphere_intersection.distance = sphere_intersections.value.min_distance > 0.0f ? sphere_intersections.value.min_distance : sphere_intersections.value.max_distance;
+            sphere_intersection.index = node.index;
+        }
+
+        return sphere_intersection;
+    } else {
+        const ClosestSphereIntersection left_intersection = intersect(ray, bvh, node.left, spheres);
+        const ClosestSphereIntersection right_intersection = intersect(ray, bvh, node.right, spheres);
+        if (left_intersection.distance < right_intersection.distance) {
+            return left_intersection;
+        } else if (right_intersection.distance < left_intersection.distance) {
+            return right_intersection;
+        } else {
+            return MISS;
+        }
+    }
+}
+
 static Colour intersect(Ray ray, const Scene& scene) {
     static constexpr int MAX_BOUNCE_COUNT = 50;
 
     Colour colour = {0.0f, 0.0f, 0.0f};
     Colour attenuation = {1.0f, 1.0f, 1.0f};
     for (int bounce_index = 0; bounce_index < MAX_BOUNCE_COUNT; ++bounce_index) {
-        const Maybe<ClosestSphereIntersection> closest_sphere_intersection = intersect(ray, scene.spheres, scene.sphere_count);
-        if (closest_sphere_intersection.is_valid) {
-            const int sphere_index = closest_sphere_intersection.value.index;
+        const ClosestSphereIntersection closest_sphere_intersection = intersect(ray, *scene.sphere_bvh, 0, scene.spheres);
+        if (closest_sphere_intersection.distance < REAL_MAX && closest_sphere_intersection.index != -1) {
+            const int sphere_index = closest_sphere_intersection.index;
             const Sphere& sphere = scene.spheres[sphere_index];
-            const Vec3 intersection_point = ray.origin + closest_sphere_intersection.value.distance * ray.direction;
+            const Vec3 intersection_point = ray.origin + closest_sphere_intersection.distance * ray.direction;
             const real sign = (sphere.radius < 0.0f) ? -1.0f : 1.0f;    // trick to model hollow spheres, don't want this polluting the scatter routine
             const Vec3 sphere_unit_normal = sign * normalise(intersection_point - sphere.centre);
 

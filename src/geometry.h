@@ -11,23 +11,32 @@ struct Ray {
     Vec3 direction;
 };
 
+struct AABB {
+    Vec3 min;
+    Vec3 max;
+};
+
+static AABB& operator+=(AABB& lhs, const AABB& rhs);
+
+struct AABBIntersections {
+    real min_distance;
+    real max_distance;
+};
+
+static AABBIntersections intersect(const Ray& ray, const AABB& aabb);
+
 struct Sphere {
     Vec3 centre;
     real radius;
 };
 
+static AABB construct_aabb(const Sphere& sphere);
+
 struct SphereIntersections {
-    real distance_1;
-    real distance_2;
+    real min_distance;
+    real max_distance;
 };
 
 static Maybe<SphereIntersections> intersect(const Ray& ray, const Sphere& sphere);
-
-struct ClosestSphereIntersection {
-    int index;
-    real distance;
-};
-
-static Maybe<ClosestSphereIntersection> intersect(const Ray& ray, const Sphere* spheres, int count);
 
 #endif

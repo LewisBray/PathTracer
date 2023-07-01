@@ -4,11 +4,13 @@
 #include "geometry.h"
 #include "material.h"
 #include "colour.h"
+#include "bvh.h"
 
 struct Scene {
     const Material* materials;
     
     const Sphere* spheres;
+    const BVH* sphere_bvh;
     const int* sphere_material_indices;
     int sphere_count;
 };

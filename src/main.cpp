@@ -4,6 +4,7 @@
 #include "colour.h"
 #include "types.h"
 #include "vec3.h"
+#include "bvh.h"
 #include "rng.h"
 
 #include "path_tracing.cpp"
@@ -11,6 +12,7 @@
 #include "material.cpp"
 #include "colour.cpp"
 #include "vec3.cpp"
+#include "bvh.cpp"
 #include "rng.cpp"
 
 #include <cassert>
@@ -400,9 +402,11 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     assert(sphere_index == SPHERE_COUNT);
 
+    const BVH sphere_bvh = construct_sphere_bvh(spheres, SPHERE_COUNT);
     const Scene scene{
         materials,
         spheres,
+        &sphere_bvh,
         sphere_material_indices,
         SPHERE_COUNT
     };
