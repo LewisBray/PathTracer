@@ -1,8 +1,8 @@
 #ifndef GEOMETRY_H
 #define GEOMETRY_H
 
+#include "linear_algebra.h"
 #include "types.h"
-#include "vec3.h"
 
 #include "maybe.hpp"
 
@@ -38,5 +38,15 @@ struct SphereIntersections {
 };
 
 static Maybe<SphereIntersections> intersect(const Ray& ray, const Sphere& sphere);
+
+struct Triangle {
+    Vec3 a;
+    Vec3 b;
+    Vec3 c;
+};
+
+static Vec3 unit_normal(const Triangle& triangle);
+static AABB construct_aabb(const Triangle& triangle);
+static Maybe<real> intersect(const Ray& ray, const Triangle& triangle);
 
 #endif

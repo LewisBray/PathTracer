@@ -39,13 +39,22 @@ static Vec3 random_unit_vector(const Vec3& seed) {
     u32 rng = noise_3d(x, y, z);
 
     rng = random_number(rng);
-    const real random_x = real_from_rng(rng) - 0.5f;
+    const real x_randomness = real_from_rng(rng);
+    const real random_x = 2.0f * x_randomness - 1.0f;
+
+    const real y_max = std::sqrt(1.0f - random_x * random_x);
+    const real y_min = -y_max;
 
     rng = random_number(rng);
-    const real random_y = real_from_rng(rng) - 0.5f;
+    const real y_randomness = real_from_rng(rng);
+    const real random_y = (y_max - y_min) * y_randomness + y_min;
+
+    const real z_max = std::sqrt(1.0f - random_x * random_x - random_y * random_y);
+    const real z_min = -z_max;
 
     rng = random_number(rng);
-    const real random_z = real_from_rng(rng) - 0.5f;
+    const real z_randomness = real_from_rng(rng);
+    const real random_z = (z_max - z_min) * z_randomness + z_min;
 
     const Vec3 random_vector = Vec3{random_x, random_y, random_z};
     return normalise(random_vector);

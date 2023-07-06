@@ -15,5 +15,6 @@ struct Node {
 using BVH = std::vector<Node>;
 
 static BVH construct_sphere_bvh(const Sphere* spheres, int count);
+static BVH construct_triangle_bvh(const Triangle* triangles, int count);
 
 #endif

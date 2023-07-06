@@ -12,7 +12,13 @@ struct Scene {
     const Sphere* spheres;
     const BVH* sphere_bvh;
     const int* sphere_material_indices;
-    int sphere_count;
+
+    const Triangle* triangles;
+    const BVH* triangle_bvh;
+    const int* triangle_material_indices;
+
+    Colour background_gradient_start;
+    Colour background_gradient_end;
 };
 
 static Colour intersect(Ray ray, const Scene& scene);

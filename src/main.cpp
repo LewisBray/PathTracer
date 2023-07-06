@@ -1,17 +1,17 @@
+#include "linear_algebra.h"
 #include "path_tracing.h"
 #include "geometry.h"
 #include "material.h"
 #include "colour.h"
 #include "types.h"
-#include "vec3.h"
 #include "bvh.h"
 #include "rng.h"
 
+#include "linear_algebra.cpp"
 #include "path_tracing.cpp"
 #include "geometry.cpp"
 #include "material.cpp"
 #include "colour.cpp"
-#include "vec3.cpp"
 #include "bvh.cpp"
 #include "rng.cpp"
 
@@ -25,13 +25,17 @@
 static constexpr real PI = 3.14159265358979323846264f;
 
 // app settings
-static constexpr real ASPECT_RATIO = 3.0f / 2.0f;
-static constexpr real FOV_Y_DEGREES = 20.0f;
+// static constexpr real ASPECT_RATIO = 3.0f / 2.0f;
+static constexpr real ASPECT_RATIO = 1.0f;
+// static constexpr real FOV_Y_DEGREES = 20.0f;
+static constexpr real FOV_Y_DEGREES = 40.0f;
 static constexpr real APERTURE = 0.1f;
-static constexpr int SAMPLES_PER_PIXEL = 500;
-static constexpr Vec3 CAMERA_POSITION{13.0f, 2.0f, 3.0f};
-static constexpr Vec3 CAMERA_TARGET{0.0f, 0.0f, 0.0f};
-static constexpr int CLIENT_WIDTH = 1200;
+static constexpr int SAMPLES_PER_PIXEL = 100;
+// static constexpr Vec3 CAMERA_POSITION{13.0f, 2.0f, 3.0f};
+static constexpr Vec3 CAMERA_POSITION{278.0f, 278.0f, -800.0f};
+// static constexpr Vec3 CAMERA_TARGET{0.0f, 0.0f, 0.0f};
+static constexpr Vec3 CAMERA_TARGET{278.0f, 278.0f, 0.0f};
+static constexpr int CLIENT_WIDTH = 600;
 
 static constexpr real LENS_RADIUS = 0.5f * APERTURE;
 static constexpr int CLIENT_HEIGHT = static_cast<int>(static_cast<real>(CLIENT_WIDTH) / ASPECT_RATIO);
@@ -79,23 +83,25 @@ static void render_scanline(
     for (int column = 0; column < CLIENT_WIDTH; ++column) {
         Colour colour = {};
         for (int sample_index = 0; sample_index < SAMPLES_PER_PIXEL; ++sample_index) {
-            const u32 u_rng = noise_3d(row, column, sample_index + 0);
-            const real u_randomness = real_from_rng(u_rng);
+            u32 rng = noise_3d(row, column, sample_index);
+            
+            rng = random_number(rng);
+            const real u_randomness = real_from_rng(rng);
             const real u = (static_cast<real>(column) + u_randomness) / static_cast<real>(CLIENT_WIDTH - 1);
 
-            const u32 v_rng = noise_3d(row, column, sample_index + 1);
-            const real v_randomness = real_from_rng(v_rng);
+            rng = random_number(rng);
+            const real v_randomness = real_from_rng(rng);
             const real v = (static_cast<real>(row) + v_randomness) / static_cast<real>(CLIENT_HEIGHT - 1);
 
-            const u32 a_rng = noise_3d(column, row, sample_index + 0);
-            const real a_randomness = real_from_rng(a_rng);
+            rng = random_number(rng);
+            const real a_randomness = real_from_rng(rng);
             const real a = APERTURE * a_randomness - LENS_RADIUS;
 
             const real b_max = std::sqrt(LENS_RADIUS * LENS_RADIUS - a * a);
             const real b_min = -b_max;
 
-            const real b_rng = noise_3d(column, row, sample_index + 1);
-            const real b_randomness = real_from_rng(b_rng);
+            rng = random_number(rng);
+            const real b_randomness = real_from_rng(rng);
             const real b = (b_max - b_min) * b_randomness + b_min;
 
             const Vec3 random_offset = a * camera_x + b * camera_y;
@@ -190,6 +196,12 @@ static void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixe
     const BOOL wrote_to_file = WriteFile(file_handle, pixels, pixel_byte_count, &bytes_written, nullptr);
     assert(wrote_to_file != FALSE);
     assert(bytes_written == pixel_byte_count);
+
+    for (u32 byte_index = 0; byte_index < pixel_byte_count; byte_index += 4) {
+        const unsigned char temp = pixels[byte_index + 0];
+        pixels[byte_index + 0] = pixels[byte_index + 2];
+        pixels[byte_index + 2] = temp;
+    }
 
     const BOOL closed_handle = CloseHandle(file_handle);
     assert(closed_handle != FALSE);
@@ -309,7 +321,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const Vec3 camera_x = normalise(Vec3{0.0f, 1.0f, 0.0f} ^ camera_z);
     const Vec3 camera_y = camera_z ^ camera_x;
 
-    const real focus_distance = 10.0f;
+    // const real focus_distance = 10.0f;
+    const real focus_distance = magnitude(CAMERA_POSITION - CAMERA_TARGET);
     const Vec3 step_x = focus_distance * viewport_width * camera_x;
     const Vec3 step_y = focus_distance * viewport_height * camera_y;
 
@@ -410,7 +423,175 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         spheres,
         &sphere_bvh,
         sphere_material_indices,
-        SPHERE_COUNT
+        nullptr,
+        nullptr,
+        nullptr,
+        Colour{1.0f, 1.0f, 1.0f},
+        Colour{0.5f, 0.7f, 1.0f}
+    };
+
+    const Material cornell_materials[] = {
+        construct_lambertian_material(Colour{0.65f, 0.05f, 0.05f}), // red
+        construct_lambertian_material(Colour{0.73f, 0.73f, 0.73f}), // white
+        construct_lambertian_material(Colour{0.12f, 0.45f, 0.15f}), // green
+        construct_diffuse_light_material(Colour{1.0f, 1.0f, 1.0f}, 15.0f),  // light
+        construct_dielectric_material(1.5f)
+    };
+
+    const Sphere cornell_spheres[1] = {
+        Sphere{Vec3{183.0f, 240.0f, 169.0f}, 75.0f}
+    };
+
+    const int cornell_sphere_material_indices[1] = {4};
+
+    const BVH cornell_sphere_bvh = construct_sphere_bvh(cornell_spheres, 1);
+
+    const Vec3 unit_box_vertices[] = {
+        // +z
+        Vec3{0.0f, 1.0f, 1.0f}, Vec3{0.0f, 0.0f, 1.0f}, Vec3{1.0f, 0.0f, 1.0f},
+        Vec3{1.0f, 0.0f, 1.0f}, Vec3{1.0f, 1.0f, 1.0f}, Vec3{0.0f, 1.0f, 1.0f},
+
+        // +x
+        Vec3{1.0f, 1.0f, 1.0f}, Vec3{1.0f, 0.0f, 1.0f}, Vec3{1.0f, 0.0f, 0.0f},
+        Vec3{1.0f, 0.0f, 0.0f}, Vec3{1.0f, 1.0f, 0.0f}, Vec3{1.0f, 1.0f, 1.0f},
+
+        // -z
+        Vec3{1.0f, 1.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 0.0f},
+        Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}, Vec3{1.0f, 1.0f, 0.0f},
+
+        // -x
+        Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
+        Vec3{0.0f, 0.0f, 1.0f}, Vec3{0.0f, 1.0f, 1.0f}, Vec3{0.0f, 1.0f, 0.0f},
+
+        // +y
+        Vec3{1.0f, 1.0f, 1.0f}, Vec3{1.0f, 1.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f},
+        Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.0f, 1.0f, 1.0f}, Vec3{1.0f, 1.0f, 1.0f},
+
+        // -y
+        Vec3{0.0f, 0.0f, 1.0f}, Vec3{0.0f, 0.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f},
+        Vec3{1.0f, 0.0f, 0.0f}, Vec3{1.0f, 0.0f, 1.0f}, Vec3{0.0f, 0.0f, 1.0f}
+    };
+
+    const Mat3 right_box_transform = scaling_matrix(165.0f, 165.0f, 165.0f) * rotation_matrix(-PI / 10.0f, 0.0f, 1.0f, 0.0f);
+    Vec3 right_box_vertices[36] = {};
+    for (int i = 0; i < 36; ++i) {
+        right_box_vertices[i] = right_box_transform * unit_box_vertices[i] + Vec3{130.0f, 0.0f, 65.0f};
+    }
+
+    Vec3 location = right_box_transform * Vec3{0.5f, 1.0f, 0.5f} + Vec3{130.0f, 0.0f, 65.0f};
+
+    assert(sizeof(unit_box_vertices) == sizeof(right_box_vertices));
+
+    const Mat3 left_box_transform = scaling_matrix(165.0f, 330.0f, 165.0f) * rotation_matrix(PI / 12.0f, 0.0f, 1.0f, 0.0f);
+    Vec3 left_box_vertices[36] = {};
+    for (int i = 0; i < 36; ++i) {
+        left_box_vertices[i] = left_box_transform * unit_box_vertices[i] + Vec3{265.0f, 0.0f, 295.0f};
+    }
+
+    assert(sizeof(unit_box_vertices) == sizeof(left_box_vertices));
+
+    const Triangle cornell_triangles[36] = {
+        // left wall
+        Triangle{Vec3{555.0f, 0.0f, 0.0f}, Vec3{555.0f, 0.0f, 555.0f}, Vec3{555.0f, 555.0f, 555.0f}},
+        Triangle{Vec3{555.0f, 555.0f, 555.0f}, Vec3{555.0f, 555.0f, 0.0f}, Vec3{555.0f, 0.0f, 0.0f}},
+
+        // right wall
+        Triangle{Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.0f, 555.0f, 0.0f}, Vec3{0.0f, 555.0f, 555.0f}},
+        Triangle{Vec3{0.0f, 555.0f, 555.0f}, Vec3{0.0f, 0.0f, 555.0f}, Vec3{0.0f, 0.0f, 0.0f}},
+
+        // floor
+        Triangle{Vec3{0.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 555.0f}, Vec3{555.0f, 0.0f, 555.0f}},
+        Triangle{Vec3{555.0f, 0.0f, 555.0f}, Vec3{555.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 0.0f}},
+
+        // ceiling
+        Triangle{Vec3{0.0f, 555.0f, 0.0f}, Vec3{555.0f, 555.0f, 0.0f}, Vec3{555.0f, 555.0f, 555.0f}},
+        Triangle{Vec3{555.0f, 555.0f, 555.0f}, Vec3{0.0f, 555.0f, 555.0f}, Vec3{0.0f, 555.0f, 0.0f}},
+
+        // back
+        Triangle{Vec3{0.0f, 0.0f, 555.0f}, Vec3{0.0f, 555.0f, 555.0f}, Vec3{555.0f, 555.0f, 555.0f}},
+        Triangle{Vec3{555.0f, 555.0f, 555.0f}, Vec3{555.0f, 0.0f, 555.0f}, Vec3{0.0f, 0.0f, 555.0f}},
+
+        // light
+        Triangle{Vec3{213.0f, 554.0f, 227.0f}, Vec3{343.0f, 554.0f, 227.0f}, Vec3{343.0f, 554.0f, 332.0f}},
+        Triangle{Vec3{343.0f, 554.0f, 332.0f}, Vec3{213.0f, 554.0f, 332.0f}, Vec3{213.0f, 554.0f, 227.0f}},
+
+        // right box
+        Triangle{right_box_vertices[0], right_box_vertices[1], right_box_vertices[2]},
+        Triangle{right_box_vertices[3], right_box_vertices[4], right_box_vertices[5]},
+
+        Triangle{right_box_vertices[6], right_box_vertices[7], right_box_vertices[8]},
+        Triangle{right_box_vertices[9], right_box_vertices[10], right_box_vertices[11]},
+
+        Triangle{right_box_vertices[12], right_box_vertices[13], right_box_vertices[14]},
+        Triangle{right_box_vertices[15], right_box_vertices[16], right_box_vertices[17]},
+
+        Triangle{right_box_vertices[18], right_box_vertices[19], right_box_vertices[20]},
+        Triangle{right_box_vertices[21], right_box_vertices[22], right_box_vertices[23]},
+
+        Triangle{right_box_vertices[24], right_box_vertices[25], right_box_vertices[26]},
+        Triangle{right_box_vertices[27], right_box_vertices[28], right_box_vertices[29]},
+
+        Triangle{right_box_vertices[30], right_box_vertices[31], right_box_vertices[32]},
+        Triangle{right_box_vertices[33], right_box_vertices[34], right_box_vertices[35]},
+
+        // left box
+        Triangle{left_box_vertices[0], left_box_vertices[1], left_box_vertices[2]},
+        Triangle{left_box_vertices[3], left_box_vertices[4], left_box_vertices[5]},
+
+        Triangle{left_box_vertices[6], left_box_vertices[7], left_box_vertices[8]},
+        Triangle{left_box_vertices[9], left_box_vertices[10], left_box_vertices[11]},
+
+        Triangle{left_box_vertices[12], left_box_vertices[13], left_box_vertices[14]},
+        Triangle{left_box_vertices[15], left_box_vertices[16], left_box_vertices[17]},
+
+        Triangle{left_box_vertices[18], left_box_vertices[19], left_box_vertices[20]},
+        Triangle{left_box_vertices[21], left_box_vertices[22], left_box_vertices[23]},
+
+        Triangle{left_box_vertices[24], left_box_vertices[25], left_box_vertices[26]},
+        Triangle{left_box_vertices[27], left_box_vertices[28], left_box_vertices[29]},
+
+        Triangle{left_box_vertices[30], left_box_vertices[31], left_box_vertices[32]},
+        Triangle{left_box_vertices[33], left_box_vertices[34], left_box_vertices[35]}
+    };
+
+    const int cornell_triangle_material_indices[36] = {
+        // left wall
+        2, 2,
+
+        // right wall
+        0, 0,
+
+        // floor
+        1, 1,
+
+        // ceiling
+        1, 1,
+
+        // back
+        1, 1,
+
+        // light
+        3, 3,
+
+        // right box
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+
+        // left box
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+    };
+
+    const BVH cornell_triangle_bvh = construct_triangle_bvh(cornell_triangles, 36);
+
+    const Scene cornell_box{
+        cornell_materials,
+        cornell_spheres,
+        &cornell_sphere_bvh,
+        cornell_sphere_material_indices,
+        cornell_triangles,
+        &cornell_triangle_bvh,
+        cornell_triangle_material_indices,
+        Colour{0.0f, 0.0f, 0.0f},
+        Colour{0.0f, 0.0f, 0.0f}
     };
 
     LARGE_INTEGER render_start_time = {};
@@ -420,7 +601,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     for (int row = 0; row < CLIENT_HEIGHT; ++row) {
         RenderWorkQueue::Entry entry = {};
         entry.row = row;
-        entry.scene = scene;
+        entry.scene = cornell_box;
         entry.camera_x = camera_x;
         entry.camera_y = camera_y;
         entry.bottom_left = bottom_left;

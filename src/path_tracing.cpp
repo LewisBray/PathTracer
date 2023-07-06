@@ -5,15 +5,15 @@
 #include <cmath>
 
 static Vec3 reflect(const Vec3& direction, const Vec3& unit_normal) {
-    assert(std::abs(magnitude(direction) - 1.0f) < 1.0e-6);
-    assert(std::abs(magnitude(unit_normal) - 1.0f) < 1.0e-6);
+    assert(std::abs(direction * direction - 1.0f) < 1.0e-6f);
+    assert(std::abs(unit_normal * unit_normal - 1.0f) < 1.0e-6f);
 
     return direction - 2.0f * (direction * unit_normal) * unit_normal;
 }
 
 static Vec3 refract(const Vec3& direction, const Vec3& unit_normal, const real refraction_ratio) {
-    assert(std::abs(magnitude(direction) - 1.0f) < 1.0e-6);
-    assert(std::abs(magnitude(unit_normal) - 1.0f) < 1.0e-6);
+    assert(std::abs(direction * direction - 1.0f) < 1.0e-6f);
+    assert(std::abs(unit_normal * unit_normal - 1.0f) < 1.0e-6f);
 
     const real cos_theta = -direction * unit_normal;
     assert(-1.0f <= cos_theta && cos_theta <= 1.0f);
@@ -33,18 +33,17 @@ static real reflectance(const real cos_theta, const real refraction_ratio) {
 }
 
 static Maybe<Ray> scatter(const Ray& ray, const Material& material, const Vec3& point, const Vec3& point_unit_normal) {
-    assert(std::abs(magnitude(ray.direction) - 1.0f) < 1.0e-6);
-    assert(std::abs(magnitude(point_unit_normal) - 1.0f) < 1.0e-6);
+    assert(std::abs(ray.direction * ray.direction - 1.0f) < 1.0e-6f);
+    assert(std::abs(point_unit_normal * point_unit_normal - 1.0f) < 1.0e-6f);
 
     static constexpr real NUDGE_FACTOR = 0.001f;
 
     switch (material.type) {
         case Material::Type::LAMBERTIAN: {
             Maybe<Ray> scattered_ray = {};
-            const Vec3 random = random_unit_vector(point_unit_normal);
-            const real sign = (random * point_unit_normal < 0.0f) ? -1.0f : 1.0f;
+            const Vec3 random = random_unit_vector(ray.direction);
             scattered_ray.value.origin = point + NUDGE_FACTOR * point_unit_normal;
-            scattered_ray.value.direction = sign * random;
+            scattered_ray.value.direction = normalise(point_unit_normal + 0.99f * random);
             scattered_ray.is_valid = true;
             
             return scattered_ray;
@@ -52,7 +51,7 @@ static Maybe<Ray> scatter(const Ray& ray, const Material& material, const Vec3& 
 
         case Material::Type::METAL: {
             Maybe<Ray> scattered_ray = {};
-            const Vec3 random = random_unit_vector(point_unit_normal);
+            const Vec3 random = random_unit_vector(ray.direction);
             const real fuzziness = material.metal.fuzziness;
             const Vec3 reflected_direction = reflect(ray.direction, point_unit_normal);
             scattered_ray.value.origin = point + NUDGE_FACTOR * point_unit_normal;
@@ -97,19 +96,19 @@ static Maybe<Ray> scatter(const Ray& ray, const Material& material, const Vec3& 
     }
 }
 
-static Colour background_gradient(const Ray& ray) {
-    const real t = 0.5f * (ray.direction.y + 1.0f);
-    return (1.0f - t) * Colour{1.0, 1.0, 1.0} + t * Colour{0.5, 0.7, 1.0};
+static Colour background_gradient(const Colour& start, const Colour& end, const real ray_direction_y) {
+    const real t = 0.5f * (ray_direction_y + 1.0f);
+    return (1.0f - t) * start + t * end;
 }
 
-struct ClosestSphereIntersection {
+struct ClosestShapeIntersection {
     int index;
     real distance;
 };
 
-static constexpr ClosestSphereIntersection MISS{-1, REAL_MAX};
+static constexpr ClosestShapeIntersection MISS{-1, REAL_MAX};
 
-static ClosestSphereIntersection intersect(const Ray& ray, const BVH& bvh, const int node_index, const Sphere* const spheres) {
+static ClosestShapeIntersection intersect(const Ray& ray, const BVH& bvh, const int node_index, const Sphere* const spheres) {
     const Node& node = bvh[node_index];
     const AABBIntersections aabb_intersections = intersect(ray, node.aabb);
     if (aabb_intersections.max_distance < 0.0f || aabb_intersections.min_distance > aabb_intersections.max_distance) {
@@ -119,7 +118,7 @@ static ClosestSphereIntersection intersect(const Ray& ray, const BVH& bvh, const
     if (node.left == 0 && node.right == 0) {
         const Sphere& sphere = spheres[node.index];
         const Maybe<SphereIntersections> sphere_intersections = intersect(ray, sphere);
-        ClosestSphereIntersection sphere_intersection = MISS;
+        ClosestShapeIntersection sphere_intersection = MISS;
         if (sphere_intersections.is_valid && (sphere_intersections.value.min_distance > 0.0f || sphere_intersections.value.max_distance > 0.0f)) {
             sphere_intersection.distance = sphere_intersections.value.min_distance > 0.0f ? sphere_intersections.value.min_distance : sphere_intersections.value.max_distance;
             sphere_intersection.index = node.index;
@@ -127,8 +126,38 @@ static ClosestSphereIntersection intersect(const Ray& ray, const BVH& bvh, const
 
         return sphere_intersection;
     } else {
-        const ClosestSphereIntersection left_intersection = intersect(ray, bvh, node.left, spheres);
-        const ClosestSphereIntersection right_intersection = intersect(ray, bvh, node.right, spheres);
+        const ClosestShapeIntersection left_intersection = intersect(ray, bvh, node.left, spheres);
+        const ClosestShapeIntersection right_intersection = intersect(ray, bvh, node.right, spheres);
+        if (left_intersection.distance < right_intersection.distance) {
+            return left_intersection;
+        } else if (right_intersection.distance < left_intersection.distance) {
+            return right_intersection;
+        } else {
+            return MISS;
+        }
+    }
+}
+
+static ClosestShapeIntersection intersect(const Ray& ray, const BVH& bvh, const int node_index, const Triangle* const triangles) {
+    const Node& node = bvh[node_index];
+    const AABBIntersections aabb_intersections = intersect(ray, node.aabb);
+    if (aabb_intersections.max_distance < 0.0f || aabb_intersections.min_distance > aabb_intersections.max_distance) {
+        return MISS;
+    }
+
+    if (node.left == 0 && node.right == 0) {
+        const Triangle& triangle = triangles[node.index];
+        const Maybe<real> triangle_intersection = intersect(ray, triangle); // TODO: should this routine check < 0, sphere intersection doesn't
+        ClosestShapeIntersection result = MISS;
+        if (triangle_intersection.is_valid) {
+            result.distance = triangle_intersection.value;
+            result.index = node.index;
+        }
+
+        return result;
+    } else {
+        const ClosestShapeIntersection left_intersection = intersect(ray, bvh, node.left, triangles);
+        const ClosestShapeIntersection right_intersection = intersect(ray, bvh, node.right, triangles);
         if (left_intersection.distance < right_intersection.distance) {
             return left_intersection;
         } else if (right_intersection.distance < left_intersection.distance) {
@@ -145,31 +174,51 @@ static Colour intersect(Ray ray, const Scene& scene) {
     Colour colour = {0.0f, 0.0f, 0.0f};
     Colour attenuation = {1.0f, 1.0f, 1.0f};
     for (int bounce_index = 0; bounce_index < MAX_BOUNCE_COUNT; ++bounce_index) {
-        const ClosestSphereIntersection closest_sphere_intersection = intersect(ray, *scene.sphere_bvh, 0, scene.spheres);
-        if (closest_sphere_intersection.distance < REAL_MAX && closest_sphere_intersection.index != -1) {
-            const int sphere_index = closest_sphere_intersection.index;
-            const Sphere& sphere = scene.spheres[sphere_index];
-            const Vec3 intersection_point = ray.origin + closest_sphere_intersection.distance * ray.direction;
-            const real sign = (sphere.radius < 0.0f) ? -1.0f : 1.0f;    // trick to model hollow spheres, don't want this polluting the scatter routine
-            const Vec3 sphere_unit_normal = sign * normalise(intersection_point - sphere.centre);   // TODO: can divide by radius instead
+        const ClosestShapeIntersection closest_sphere_intersection = (scene.sphere_bvh != nullptr) ? intersect(ray, *scene.sphere_bvh, 0, scene.spheres) : MISS;
+        const ClosestShapeIntersection closest_triangle_intersection = (scene.triangle_bvh != nullptr) ? intersect(ray, *scene.triangle_bvh, 0, scene.triangles) : MISS;
+        if (closest_sphere_intersection.index != -1 || closest_triangle_intersection.index != -1) {
+            Vec3 intersection_point = {};
+            Vec3 shape_unit_normal = {};
+            Material material = {};
+            if (closest_sphere_intersection.distance < closest_triangle_intersection.distance) {
+                assert(closest_sphere_intersection.distance < REAL_MAX);
 
-            const int sphere_material_index = scene.sphere_material_indices[sphere_index];
-            const Material& sphere_material = scene.materials[sphere_material_index];
-            const Colour sphere_material_emission = get_emission(sphere_material);
+                const int sphere_index = closest_sphere_intersection.index;
+                const Sphere& sphere = scene.spheres[sphere_index];
+                intersection_point = ray.origin + closest_sphere_intersection.distance * ray.direction;
+                
+                const real sign = (sphere.radius < 0.0f) ? -1.0f : 1.0f;    // trick to model hollow spheres, don't want this polluting the scatter routine
+                shape_unit_normal = sign * normalise(intersection_point - sphere.centre);   // TODO: can divide by radius instead
 
-            const Maybe<Ray> scattered_ray = scatter(ray, sphere_material, intersection_point, sphere_unit_normal);
+                const int sphere_material_index = scene.sphere_material_indices[sphere_index];
+                material = scene.materials[sphere_material_index];
+            } else {
+                assert(closest_triangle_intersection.distance < REAL_MAX);
+
+                const int triangle_index = closest_triangle_intersection.index;
+                const Triangle& triangle = scene.triangles[triangle_index];
+                intersection_point = ray.origin + closest_triangle_intersection.distance * ray.direction;
+                
+                shape_unit_normal = unit_normal(triangle);
+
+                const int triangle_material_index = scene.triangle_material_indices[triangle_index];
+                material = scene.materials[triangle_material_index];
+            }
+
+            const Colour material_emission = get_emission(material);
+            const Maybe<Ray> scattered_ray = scatter(ray, material, intersection_point, shape_unit_normal);
             if (scattered_ray.is_valid) {
                 ray = scattered_ray.value;
 
-                const Colour& sphere_material_colour = get_colour(sphere_material);
-                colour += attenuation * sphere_material_emission;
-                attenuation *= sphere_material_colour;
+                const Colour& material_colour = get_colour(material);
+                colour += attenuation * material_emission;
+                attenuation *= material_colour;
             } else {
-                colour = sphere_material_emission;
+                colour += attenuation * material_emission;
                 break;
             }
         } else {
-            colour += attenuation * background_gradient(ray);
+            colour += attenuation * background_gradient(scene.background_gradient_start, scene.background_gradient_end, ray.direction.y);
             break;
         }
     }

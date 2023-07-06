@@ -6,7 +6,7 @@
 
 static AABBIntersections intersect(const Ray& ray, const AABB& aabb) {
     static_assert(std::numeric_limits<real>::is_iec559, "IEEE754 floating-point implementation required");
-    assert(std::abs(magnitude(ray.direction) - 1.0f) < 1.0e-6);
+    assert(std::abs(ray.direction * ray.direction - 1.0f) < 1.0e-6f);
 
     const real inverse_x = 1.0f / ray.direction.x;
     const real min_x_plane_intersection_time = (aabb.min.x - ray.origin.x) * inverse_x;
@@ -57,7 +57,7 @@ static AABB construct_aabb(const Sphere& sphere) {
 }
 
 static Maybe<SphereIntersections> intersect(const Ray& ray, const Sphere& sphere) {
-    assert(std::abs(magnitude(ray.direction) - 1.0f) < 1.0e-6f);
+    assert(std::abs(ray.direction * ray.direction - 1.0f) < 1.0e-6f);
 
     Maybe<SphereIntersections> result = {};
 
@@ -77,6 +77,57 @@ static Maybe<SphereIntersections> intersect(const Ray& ray, const Sphere& sphere
     result.value.min_distance = intersections_mid_point_distance - intersections_mid_point_to_intersections_distance;
     result.value.max_distance = intersections_mid_point_distance + intersections_mid_point_to_intersections_distance;
     result.is_valid = true;
+
+    return result;
+}
+
+static Vec3 unit_normal(const Triangle& triangle) {
+    const Vec3 a_to_b = triangle.b - triangle.a;
+    const Vec3 a_to_c = triangle.c - triangle.a;
+
+    const Vec3 plane_normal = a_to_b ^ a_to_c;
+    return normalise(plane_normal);
+}
+
+static AABB construct_aabb(const Triangle& triangle) {
+    AABB aabb = {};
+
+    aabb.min.x = std::min(triangle.a.x, std::min(triangle.b.x, triangle.c.x));
+    aabb.min.y = std::min(triangle.a.y, std::min(triangle.b.y, triangle.c.y));
+    aabb.min.z = std::min(triangle.a.z, std::min(triangle.b.z, triangle.c.z));
+
+    aabb.max.x = std::max(triangle.a.x, std::max(triangle.b.x, triangle.c.x));
+    aabb.max.y = std::max(triangle.a.y, std::max(triangle.b.y, triangle.c.y));
+    aabb.max.z = std::max(triangle.a.z, std::max(triangle.b.z, triangle.c.z));
+
+    return aabb;
+}
+
+static Maybe<real> intersect(const Ray& ray, const Triangle& triangle) {
+    assert(std::abs(ray.direction * ray.direction - 1.0f) < 1.0e-6f);
+
+    Maybe<real> result = {};
+
+    const Vec3 a_to_b = triangle.b - triangle.a;
+    const Vec3 a_to_c = triangle.c - triangle.a;
+
+    const Vec3 plane_normal = a_to_b ^ a_to_c;
+    const real ray_direction_dot_plane_normal = ray.direction * plane_normal;
+    const bool ray_is_parallel_to_plane = std::abs(ray_direction_dot_plane_normal) < 1.0e-6f;
+
+    const Vec3 ray_origin_to_a = triangle.a - ray.origin;
+    const real intersection_distance = ray_origin_to_a * plane_normal / ray_direction_dot_plane_normal;
+
+    const Vec3 intersection_point = ray.origin + intersection_distance * ray.direction;
+    const Vec3 a_to_intersection = intersection_point - triangle.a;
+
+    const real plane_normal_magnitude_squared = plane_normal * plane_normal;
+    const real alpha = ((a_to_b ^ a_to_intersection) * plane_normal) / plane_normal_magnitude_squared;
+    const real beta = ((a_to_intersection ^ a_to_c) * plane_normal) / plane_normal_magnitude_squared;
+    const bool intersection_is_inside_triangle = (alpha >= 0.0f) && (beta >= 0.0f) && (alpha + beta <= 1.0f);
+
+    result.is_valid = !ray_is_parallel_to_plane && (intersection_distance >= 1.0e-6f) && intersection_is_inside_triangle;
+    result.value = intersection_distance;
 
     return result;
 }

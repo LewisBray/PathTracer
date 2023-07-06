@@ -77,3 +77,24 @@ static BVH construct_sphere_bvh(const Sphere* const spheres, const int count) {
 
     return bvh;
 }
+
+static BVH construct_triangle_bvh(const Triangle* const triangles, const int count) {
+    std::vector<AABB> triangle_aabbs;
+    triangle_aabbs.resize(count);
+    std::vector<int> triangle_indices;
+    triangle_indices.resize(count);
+    for (int triangle_index = 0; triangle_index < count; ++triangle_index) {
+        triangle_aabbs[triangle_index] = construct_aabb(triangles[triangle_index]);
+        triangle_indices[triangle_index] = triangle_index;
+    }
+
+    const std::size_t leaf_count = count;
+    const std::size_t max_node_count = 4 * leaf_count - 1;
+
+    BVH bvh;
+    bvh.reserve(max_node_count);
+    const int first_node_index = add_node(bvh, 0, triangle_aabbs, triangle_indices, 0, count);
+    assert(first_node_index == 0);
+
+    return bvh;
+}
