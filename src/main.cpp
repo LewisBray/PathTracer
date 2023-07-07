@@ -32,7 +32,6 @@ static constexpr real ASPECT_RATIO = 1.0f;
 // static constexpr real FOV_Y_DEGREES = 20.0f;
 static constexpr real FOV_Y_DEGREES = 40.0f;
 static constexpr real APERTURE = 0.1f;
-static constexpr int SAMPLES_PER_PIXEL = 100;
 // static constexpr Vec3 CAMERA_POSITION{13.0f, 2.0f, 3.0f};
 // static constexpr Vec3 CAMERA_POSITION{278.0f, 278.0f, -800.0f};
 static constexpr Vec3 CAMERA_POSITION{0.0f, 150.0f, 150.0f};
@@ -46,13 +45,14 @@ static constexpr int CLIENT_HEIGHT = static_cast<int>(static_cast<real>(CLIENT_W
 struct RenderWorkQueue {
     struct Entry {
         int row;
+        int sample;
         Scene scene;
         Vec3 camera_x;
         Vec3 camera_y;
         Vec3 bottom_left;
         Vec3 step_x;
         Vec3 step_y;
-        unsigned char* pixels;
+        real* pixels;
     };
 
     static constexpr int CAPACITY = CLIENT_HEIGHT;
@@ -75,58 +75,49 @@ static void push_entry(RenderWorkQueue& work_queue, const RenderWorkQueue::Entry
 
 static void render_scanline(
     const int row,
+    const int sample,
     const Scene& scene,
     const Vec3& camera_x,
     const Vec3& camera_y,
     const Vec3& bottom_left,
     const Vec3& step_x,
     const Vec3& step_y,
-    unsigned char* const pixels
+    real* const pixels
 ) {
     for (int column = 0; column < CLIENT_WIDTH; ++column) {
-        Colour colour = {};
-        for (int sample_index = 0; sample_index < SAMPLES_PER_PIXEL; ++sample_index) {
-            u32 rng = noise_3d(row, column, sample_index);
-            
-            rng = random_number(rng);
-            const real u_randomness = real_from_rng(rng);
-            const real u = (static_cast<real>(column) + u_randomness) / static_cast<real>(CLIENT_WIDTH - 1);
+        u32 rng = noise_3d(row, column, sample);
+        
+        rng = random_number(rng);
+        const real u_randomness = real_from_rng(rng);
+        const real u = (static_cast<real>(column) + u_randomness) / static_cast<real>(CLIENT_WIDTH - 1);
 
-            rng = random_number(rng);
-            const real v_randomness = real_from_rng(rng);
-            const real v = (static_cast<real>(row) + v_randomness) / static_cast<real>(CLIENT_HEIGHT - 1);
+        rng = random_number(rng);
+        const real v_randomness = real_from_rng(rng);
+        const real v = (static_cast<real>(row) + v_randomness) / static_cast<real>(CLIENT_HEIGHT - 1);
 
-            rng = random_number(rng);
-            const real a_randomness = real_from_rng(rng);
-            const real a = APERTURE * a_randomness - LENS_RADIUS;
+        rng = random_number(rng);
+        const real a_randomness = real_from_rng(rng);
+        const real a = APERTURE * a_randomness - LENS_RADIUS;
 
-            const real b_max = std::sqrt(LENS_RADIUS * LENS_RADIUS - a * a);
-            const real b_min = -b_max;
+        const real b_max = std::sqrt(LENS_RADIUS * LENS_RADIUS - a * a);
+        const real b_min = -b_max;
 
-            rng = random_number(rng);
-            const real b_randomness = real_from_rng(rng);
-            const real b = (b_max - b_min) * b_randomness + b_min;
+        rng = random_number(rng);
+        const real b_randomness = real_from_rng(rng);
+        const real b = (b_max - b_min) * b_randomness + b_min;
 
-            const Vec3 random_offset = a * camera_x + b * camera_y;
+        const Vec3 random_offset = a * camera_x + b * camera_y;
 
-            const Vec3 ray_direction = normalise(Vec3{bottom_left + u * step_x + v * step_y - CAMERA_POSITION - random_offset});
-            const Ray ray{CAMERA_POSITION + random_offset, ray_direction};
+        const Vec3 ray_direction = normalise(Vec3{bottom_left + u * step_x + v * step_y - CAMERA_POSITION - random_offset});
+        const Ray ray{CAMERA_POSITION + random_offset, ray_direction};
 
-            colour += intersect(ray, scene);
-        }
-
-        colour /= static_cast<real>(SAMPLES_PER_PIXEL);
-
-        // gamma correct
-        colour.r = std::sqrt(colour.r);
-        colour.g = std::sqrt(colour.g);
-        colour.b = std::sqrt(colour.b);
+        const Colour colour = intersect(ray, scene);
 
         const int index = 4 * (row * CLIENT_WIDTH + column);
-        pixels[index + 0] = static_cast<unsigned char>(255.0f * std::min<real>(colour.b, 1.0f));
-        pixels[index + 1] = static_cast<unsigned char>(255.0f * std::min<real>(colour.g, 1.0f));
-        pixels[index + 2] = static_cast<unsigned char>(255.0f * std::min<real>(colour.r, 1.0f));
-        pixels[index + 3] = 255;
+        pixels[index + 0] += colour.b;
+        pixels[index + 1] += colour.g;
+        pixels[index + 2] += colour.r;
+        pixels[index + 3] += 1.0f;
     }
 }
 
@@ -140,6 +131,7 @@ static bool process_work_queue_entry(RenderWorkQueue& work_queue) {
             const RenderWorkQueue::Entry& entry_to_do = work_queue.entries[entry_to_do_index];
             render_scanline(
                 entry_to_do.row,
+                entry_to_do.sample,
                 entry_to_do.scene,
                 entry_to_do.camera_x,
                 entry_to_do.camera_y,
@@ -160,6 +152,12 @@ static bool process_work_queue_entry(RenderWorkQueue& work_queue) {
 
 static bool work_in_progress(const RenderWorkQueue& work_queue) {
     return (work_queue.completed_entry_count != work_queue.entry_count);
+}
+
+static void reset(RenderWorkQueue& work_queue) {
+    work_queue.entry_count = 0;
+    work_queue.next_entry_to_do_index = 0;
+    work_queue.completed_entry_count = 0;
 }
 
 static DWORD thread_proc(const LPVOID parameter) {
@@ -292,9 +290,12 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     bitmap_info.bmiHeader.biClrUsed = 0;
     bitmap_info.bmiHeader.biClrImportant = 0;
 
-    static constexpr u32 PIXEL_BYTE_COUNT = 4 * CLIENT_WIDTH * CLIENT_HEIGHT;
-    unsigned char* const pixels = static_cast<unsigned char*>(VirtualAlloc(0, PIXEL_BYTE_COUNT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-    assert(pixels != nullptr);
+    static constexpr u32 PIXEL_COUNT = CLIENT_WIDTH * CLIENT_HEIGHT;
+    real* const pixels_real = static_cast<real*>(VirtualAlloc(0, 4 * PIXEL_COUNT * sizeof(real), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    assert(pixels_real != nullptr);
+
+    unsigned char* const pixels_u8 = static_cast<unsigned char*>(VirtualAlloc(0, 4 * PIXEL_COUNT * sizeof(unsigned char), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    assert(pixels_u8 != nullptr);    
 
     LARGE_INTEGER tick_frequency = {};
     const BOOL queried_performance_frequency = QueryPerformanceFrequency(&tick_frequency);
@@ -598,11 +599,11 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     };
 
     const Material model_materials[2] = {
-        construct_lambertian_material(Colour{0.1f, 0.1f, 0.1f}),
-        construct_diffuse_light_material(Colour{0.85f, 0.7f, 0.1f}, 5.0f)
+        construct_lambertian_material(Colour{6.0f / 255.0f, 4.0f / 255.0f, 3.0f / 255.0f}),
+        construct_diffuse_light_material(Colour{1.0f, 1.0f, 1.0f}, 10.0f)
     };
 
-    std::vector<Triangle> model_triangles = load_triangles_file(".\\models\\pawn.triangles");
+    std::vector<Triangle> model_triangles = load_triangles_file(".\\models\\bishop.triangles");
     const std::vector<int> model_triangle_material_indices(model_triangles.size(), 0);
 
     const Mat3 model_transform = rotation_matrix(-PI / 2.0f, 1.0f, 0.0f, 0.0f);
@@ -614,7 +615,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     const BVH model_triangle_bvh = construct_triangle_bvh(model_triangles.data(), model_triangles.size());
 
-    const Sphere model_light{Vec3{20.0f, 80.0f, 10.0f}, 10.0f};
+    const Sphere model_light{Vec3{20.0f, 80.0f, 10.0f}, 20.0f};
     const int model_light_material_index = 1;
     const BVH model_light_bvh = construct_sphere_bvh(&model_light, 1);
 
@@ -630,36 +631,54 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         Colour{0.0f, 0.0f, 0.0f}
     };
 
-    LARGE_INTEGER render_start_time = {};
-    const BOOL read_start_time = QueryPerformanceCounter(&render_start_time);
-    assert(read_start_time != FALSE);
-
-    for (int row = 0; row < CLIENT_HEIGHT; ++row) {
-        RenderWorkQueue::Entry entry = {};
-        entry.row = row;
-        entry.scene = model;
-        entry.camera_x = camera_x;
-        entry.camera_y = camera_y;
-        entry.bottom_left = bottom_left;
-        entry.step_x = step_x;
-        entry.step_y = step_y;
-        entry.pixels = pixels;
-
-        push_entry(work_queue, entry);
-    }
-
-    while (work_in_progress(work_queue)) {
-        process_work_queue_entry(work_queue);
-    }
-
-    LARGE_INTEGER render_finish_time = {};
-    const BOOL read_finish_time = QueryPerformanceCounter(&render_finish_time);
-    assert(read_finish_time != FALSE);
-
-    const real render_duration = static_cast<real>(render_finish_time.QuadPart - render_start_time.QuadPart) / static_cast<real>(tick_frequency.QuadPart);
-
     bool quit = false;
+    int sample = 0;
     while (!quit) {
+        LARGE_INTEGER render_start_time = {};
+        const BOOL read_start_time = QueryPerformanceCounter(&render_start_time);
+        assert(read_start_time != FALSE);
+
+        for (int row = 0; row < CLIENT_HEIGHT; ++row) {
+            RenderWorkQueue::Entry entry = {};
+            entry.row = row;
+            entry.sample = sample;
+            entry.scene = model;
+            entry.camera_x = camera_x;
+            entry.camera_y = camera_y;
+            entry.bottom_left = bottom_left;
+            entry.step_x = step_x;
+            entry.step_y = step_y;
+            entry.pixels = pixels_real;
+
+            push_entry(work_queue, entry);
+        }
+
+        while (work_in_progress(work_queue)) {
+            process_work_queue_entry(work_queue);
+        }
+
+        reset(work_queue);
+
+        LARGE_INTEGER render_finish_time = {};
+        const BOOL read_finish_time = QueryPerformanceCounter(&render_finish_time);
+        assert(read_finish_time != FALSE);
+
+        const real render_duration = static_cast<real>(render_finish_time.QuadPart - render_start_time.QuadPart) / static_cast<real>(tick_frequency.QuadPart);
+
+        for (int pixel_index = 0; pixel_index < PIXEL_COUNT; ++pixel_index) {
+            const int index = 4 * pixel_index;
+            const real b = std::min<real>(std::sqrt(pixels_real[index + 0] / static_cast<real>(sample + 1)), 1.0f);
+            const real g = std::min<real>(std::sqrt(pixels_real[index + 1] / static_cast<real>(sample + 1)), 1.0f);
+            const real r = std::min<real>(std::sqrt(pixels_real[index + 2] / static_cast<real>(sample + 1)), 1.0f);
+
+            pixels_u8[index + 0] = static_cast<unsigned char>(255.0f * b);
+            pixels_u8[index + 1] = static_cast<unsigned char>(255.0f * g);
+            pixels_u8[index + 2] = static_cast<unsigned char>(255.0f * r);
+            pixels_u8[index + 3] = 255;
+        }
+
+        ++sample;
+
         const int scanlines_copied = StretchDIBits(
           window_device_context,
           0,
@@ -670,7 +689,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
           0,
           CLIENT_WIDTH,
           CLIENT_HEIGHT,
-          pixels,
+          pixels_u8,
           &bitmap_info,
           DIB_RGB_COLORS,
           SRCCOPY
