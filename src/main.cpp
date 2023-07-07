@@ -1,4 +1,5 @@
 #include "linear_algebra.h"
+#include "model_loading.h"
 #include "path_tracing.h"
 #include "geometry.h"
 #include "material.h"
@@ -8,6 +9,7 @@
 #include "rng.h"
 
 #include "linear_algebra.cpp"
+#include "model_loading.cpp"
 #include "path_tracing.cpp"
 #include "geometry.cpp"
 #include "material.cpp"
@@ -32,9 +34,10 @@ static constexpr real FOV_Y_DEGREES = 40.0f;
 static constexpr real APERTURE = 0.1f;
 static constexpr int SAMPLES_PER_PIXEL = 100;
 // static constexpr Vec3 CAMERA_POSITION{13.0f, 2.0f, 3.0f};
-static constexpr Vec3 CAMERA_POSITION{278.0f, 278.0f, -800.0f};
-// static constexpr Vec3 CAMERA_TARGET{0.0f, 0.0f, 0.0f};
-static constexpr Vec3 CAMERA_TARGET{278.0f, 278.0f, 0.0f};
+// static constexpr Vec3 CAMERA_POSITION{278.0f, 278.0f, -800.0f};
+static constexpr Vec3 CAMERA_POSITION{0.0f, 150.0f, 150.0f};
+static constexpr Vec3 CAMERA_TARGET{0.0f, 0.0f, 0.0f};
+// static constexpr Vec3 CAMERA_TARGET{278.0f, 278.0f, 0.0f};
 static constexpr int CLIENT_WIDTH = 600;
 
 static constexpr real LENS_RADIUS = 0.5f * APERTURE;
@@ -594,6 +597,39 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         Colour{0.0f, 0.0f, 0.0f}
     };
 
+    const Material model_materials[2] = {
+        construct_lambertian_material(Colour{0.1f, 0.1f, 0.1f}),
+        construct_diffuse_light_material(Colour{0.85f, 0.7f, 0.1f}, 5.0f)
+    };
+
+    std::vector<Triangle> model_triangles = load_triangles_file(".\\models\\pawn.triangles");
+    const std::vector<int> model_triangle_material_indices(model_triangles.size(), 0);
+
+    const Mat3 model_transform = rotation_matrix(-PI / 2.0f, 1.0f, 0.0f, 0.0f);
+    for (Triangle& triangle : model_triangles) {
+        triangle.a = model_transform * triangle.a;
+        triangle.b = model_transform * triangle.b;
+        triangle.c = model_transform * triangle.c;
+    }
+
+    const BVH model_triangle_bvh = construct_triangle_bvh(model_triangles.data(), model_triangles.size());
+
+    const Sphere model_light{Vec3{20.0f, 80.0f, 10.0f}, 10.0f};
+    const int model_light_material_index = 1;
+    const BVH model_light_bvh = construct_sphere_bvh(&model_light, 1);
+
+    const Scene model{
+        model_materials,
+        &model_light,
+        &model_light_bvh,
+        &model_light_material_index,
+        model_triangles.data(),
+        &model_triangle_bvh,
+        model_triangle_material_indices.data(),
+        Colour{0.0f, 0.0f, 0.0f},
+        Colour{0.0f, 0.0f, 0.0f}
+    };
+
     LARGE_INTEGER render_start_time = {};
     const BOOL read_start_time = QueryPerformanceCounter(&render_start_time);
     assert(read_start_time != FALSE);
@@ -601,7 +637,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     for (int row = 0; row < CLIENT_HEIGHT; ++row) {
         RenderWorkQueue::Entry entry = {};
         entry.row = row;
-        entry.scene = cornell_box;
+        entry.scene = model;
         entry.camera_x = camera_x;
         entry.camera_y = camera_y;
         entry.bottom_left = bottom_left;
