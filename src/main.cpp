@@ -175,7 +175,7 @@ static DWORD thread_proc(const LPVOID parameter) {
 
 static void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixel_byte_count) {
     const HANDLE file_handle = CreateFileA(
-        "pixels.bin",
+        "pixels.data",
         GENERIC_WRITE,
         0,
         nullptr,
@@ -208,13 +208,80 @@ static void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixe
     assert(closed_handle != FALSE);
 }
 
+struct KeyboardInput {
+    bool s;
+    bool ctrl;
+};
+
+struct ApplicationState {
+    KeyboardInput keyboard_input;
+};
+
+static ApplicationState& get_application_state(const HWND window) {
+    const LONG_PTR user_data = GetWindowLongPtrA(window, GWLP_USERDATA);
+    ApplicationState* const application_state = reinterpret_cast<ApplicationState*>(user_data);
+    assert(application_state != nullptr);
+    return *application_state;
+}
+
 static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, const WPARAM w_param, const LPARAM l_param) {
     assert(window != NULL);
 
     switch (message) {
+        case WM_CREATE: {
+            assert(l_param != 0);
+            CREATESTRUCTA* const create_struct = reinterpret_cast<CREATESTRUCTA*>(l_param);
+            assert(create_struct->lpCreateParams != nullptr);   // window should be created with CreateWindowEx
+            SetWindowLongPtrA(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create_struct->lpCreateParams));
+
+            return 0;
+        }
+
         case WM_CLOSE: {
             PostQuitMessage(0);
             return 0;
+        }
+
+        case WM_KEYDOWN: {
+            ApplicationState& application_state = get_application_state(window);
+            KeyboardInput& keyboard_input = application_state.keyboard_input;
+            const char vk_key = static_cast<char>(w_param);
+            switch (vk_key) {
+                case 'S': {
+                    keyboard_input.s = true;
+                    return 0;
+                }
+
+                case VK_CONTROL: {
+                    keyboard_input.ctrl = true;
+                    return 0;
+                }
+
+                default: {
+                    return DefWindowProcA(window, message, w_param, l_param);
+                }
+            }
+        }
+
+        case WM_KEYUP: {
+            ApplicationState& application_state = get_application_state(window);
+            KeyboardInput& keyboard_input = application_state.keyboard_input;
+            const char vk_key = static_cast<char>(w_param);
+            switch (vk_key) {
+                case 'S': {
+                    keyboard_input.s = false;
+                    return 0;
+                }
+
+                case VK_CONTROL: {
+                    keyboard_input.ctrl = false;
+                    return 0;
+                }
+
+                default: {
+                    return DefWindowProcA(window, message, w_param, l_param);
+                }
+            }
         }
 
         default: {
@@ -254,6 +321,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const BOOL found_window_dimensions = AdjustWindowRect(&window_rect, WINDOW_STYLE, FALSE);
     assert(found_window_dimensions != FALSE);
 
+    ApplicationState application_state = {};
     const HWND window = CreateWindowExW(
         0,
         WINDOW_CLASS_NAME,
@@ -266,7 +334,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         NULL,
         NULL,
         instance,
-        nullptr
+        &application_state
     );
 
     assert(window != NULL);
@@ -294,7 +362,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     real* const pixels_real = static_cast<real*>(VirtualAlloc(0, 4 * PIXEL_COUNT * sizeof(real), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(pixels_real != nullptr);
 
-    unsigned char* const pixels_u8 = static_cast<unsigned char*>(VirtualAlloc(0, 4 * PIXEL_COUNT * sizeof(unsigned char), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    unsigned char* const pixels_u8 = static_cast<unsigned char*>(VirtualAlloc(0, 4 * PIXEL_COUNT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(pixels_u8 != nullptr);    
 
     LARGE_INTEGER tick_frequency = {};
@@ -631,6 +699,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         Colour{0.0f, 0.0f, 0.0f}
     };
 
+    ApplicationState previous_application_state = application_state;
+
     bool quit = false;
     int sample = 0;
     while (!quit) {
@@ -696,6 +766,14 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         );
 
         assert(scanlines_copied == CLIENT_HEIGHT);
+
+        const KeyboardInput keyboard_input = application_state.keyboard_input;
+        const KeyboardInput previous_keyboard_input = previous_application_state.keyboard_input;
+        if (keyboard_input.ctrl && !keyboard_input.s && previous_keyboard_input.s) {
+            write_pixel_data_to_file(pixels_u8, 4 * PIXEL_COUNT);
+        }
+
+        previous_application_state = application_state;
 
         MSG window_message = {};
         while (PeekMessageW(&window_message, NULL, 0, 0, PM_REMOVE) != FALSE) {
