@@ -25,21 +25,17 @@
 #include <Windows.h>
 
 static constexpr real PI = 3.14159265358979323846264f;
+static real degrees_to_radians(const real degrees) {
+    return degrees / 180.0f * PI;
+}
 
 // app settings
-// static constexpr real ASPECT_RATIO = 3.0f / 2.0f;
-static constexpr real ASPECT_RATIO = 1.0f;
-// static constexpr real FOV_Y_DEGREES = 20.0f;
-static constexpr real FOV_Y_DEGREES = 40.0f;
-static constexpr real APERTURE = 0.1f;
-// static constexpr Vec3 CAMERA_POSITION{13.0f, 2.0f, 3.0f};
-// static constexpr Vec3 CAMERA_POSITION{278.0f, 278.0f, -800.0f};
-static constexpr Vec3 CAMERA_POSITION{0.0f, 150.0f, 150.0f};
-static constexpr Vec3 CAMERA_TARGET{0.0f, 0.0f, 0.0f};
-// static constexpr Vec3 CAMERA_TARGET{278.0f, 278.0f, 0.0f};
-static constexpr int CLIENT_WIDTH = 600;
+static constexpr real SPHERES_ASPECT_RATIO = 3.0f / 2.0f;
+static constexpr real CORNELL_ASPECT_RATIO = 1.0f;
+static constexpr real MODEL_ASPECT_RATIO = 1.0f;
 
-static constexpr real LENS_RADIUS = 0.5f * APERTURE;
+static constexpr real ASPECT_RATIO = MODEL_ASPECT_RATIO;
+static constexpr int CLIENT_WIDTH = 600;
 static constexpr int CLIENT_HEIGHT = static_cast<int>(static_cast<real>(CLIENT_WIDTH) / ASPECT_RATIO);
 
 struct RenderWorkQueue {
@@ -47,6 +43,8 @@ struct RenderWorkQueue {
         int row;
         int sample;
         Scene scene;
+        real aperture;
+        Vec3 camera_position;
         Vec3 camera_x;
         Vec3 camera_y;
         Vec3 bottom_left;
@@ -77,6 +75,8 @@ static void render_scanline(
     const int row,
     const int sample,
     const Scene& scene,
+    const real aperture,
+    const Vec3& camera_position,
     const Vec3& camera_x,
     const Vec3& camera_y,
     const Vec3& bottom_left,
@@ -84,6 +84,7 @@ static void render_scanline(
     const Vec3& step_y,
     real* const pixels
 ) {
+    const real lens_radius = 0.5f * aperture;
     for (int column = 0; column < CLIENT_WIDTH; ++column) {
         u32 rng = noise_3d(row, column, sample);
         
@@ -97,9 +98,9 @@ static void render_scanline(
 
         rng = random_number(rng);
         const real a_randomness = real_from_rng(rng);
-        const real a = APERTURE * a_randomness - LENS_RADIUS;
+        const real a = aperture * a_randomness - lens_radius;
 
-        const real b_max = std::sqrt(LENS_RADIUS * LENS_RADIUS - a * a);
+        const real b_max = std::sqrt(lens_radius * lens_radius - a * a);
         const real b_min = -b_max;
 
         rng = random_number(rng);
@@ -108,8 +109,8 @@ static void render_scanline(
 
         const Vec3 random_offset = a * camera_x + b * camera_y;
 
-        const Vec3 ray_direction = normalise(Vec3{bottom_left + u * step_x + v * step_y - CAMERA_POSITION - random_offset});
-        const Ray ray{CAMERA_POSITION + random_offset, ray_direction};
+        const Vec3 ray_direction = normalise(Vec3{bottom_left + u * step_x + v * step_y - camera_position - random_offset});
+        const Ray ray{camera_position + random_offset, ray_direction};
 
         const Colour colour = intersect(ray, scene);
 
@@ -133,6 +134,8 @@ static bool process_work_queue_entry(RenderWorkQueue& work_queue) {
                 entry_to_do.row,
                 entry_to_do.sample,
                 entry_to_do.scene,
+                entry_to_do.aperture,
+                entry_to_do.camera_position,
                 entry_to_do.camera_x,
                 entry_to_do.camera_y,
                 entry_to_do.bottom_left,
@@ -209,12 +212,29 @@ static void write_pixel_data_to_file(unsigned char* const pixels, const u32 pixe
 }
 
 struct KeyboardInput {
+    bool a;
+    bool d;
+    bool e;
+    bool q;
     bool s;
+    bool w;
     bool ctrl;
+    bool up;
+    bool down;
+    bool left;
+    bool right;
+};
+
+struct MouseInput {
+    int x;
+    int y;
+    int scroll;
+    bool left;
 };
 
 struct ApplicationState {
     KeyboardInput keyboard_input;
+    MouseInput mouse_input;
 };
 
 static ApplicationState& get_application_state(const HWND window) {
@@ -247,13 +267,58 @@ static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, 
             KeyboardInput& keyboard_input = application_state.keyboard_input;
             const char vk_key = static_cast<char>(w_param);
             switch (vk_key) {
+                case 'A': {
+                    keyboard_input.a = true;
+                    return 0;
+                }
+
+                case 'D': {
+                    keyboard_input.d = true;
+                    return 0;
+                }
+
+                case 'E': {
+                    keyboard_input.e = true;
+                    return 0;
+                }
+
+                case 'Q': {
+                    keyboard_input.q = true;
+                    return 0;
+                }
+
                 case 'S': {
                     keyboard_input.s = true;
                     return 0;
                 }
 
+                case 'W': {
+                    keyboard_input.w = true;
+                    return 0;
+                }
+
                 case VK_CONTROL: {
                     keyboard_input.ctrl = true;
+                    return 0;
+                }
+
+                case VK_UP: {
+                    keyboard_input.up = true;
+                    return 0;
+                }
+
+                case VK_DOWN: {
+                    keyboard_input.down = true;
+                    return 0;
+                }
+
+                case VK_LEFT: {
+                    keyboard_input.left = true;
+                    return 0;
+                }
+
+                case VK_RIGHT: {
+                    keyboard_input.right = true;
                     return 0;
                 }
 
@@ -268,13 +333,58 @@ static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, 
             KeyboardInput& keyboard_input = application_state.keyboard_input;
             const char vk_key = static_cast<char>(w_param);
             switch (vk_key) {
+                case 'A': {
+                    keyboard_input.a = false;
+                    return 0;
+                }
+
+                case 'D': {
+                    keyboard_input.d = false;
+                    return 0;
+                }
+
+                case 'E': {
+                    keyboard_input.e = false;
+                    return 0;
+                }
+
+                case 'Q': {
+                    keyboard_input.q = false;
+                    return 0;
+                }
+
                 case 'S': {
                     keyboard_input.s = false;
                     return 0;
                 }
 
+                case 'W': {
+                    keyboard_input.w = false;
+                    return 0;
+                }
+
                 case VK_CONTROL: {
                     keyboard_input.ctrl = false;
+                    return 0;
+                }
+
+                case VK_UP: {
+                    keyboard_input.up = false;
+                    return 0;
+                }
+
+                case VK_DOWN: {
+                    keyboard_input.down = false;
+                    return 0;
+                }
+
+                case VK_LEFT: {
+                    keyboard_input.left = false;
+                    return 0;
+                }
+
+                case VK_RIGHT: {
+                    keyboard_input.right = false;
                     return 0;
                 }
 
@@ -284,16 +394,58 @@ static LRESULT CALLBACK main_window_proc(const HWND window, const UINT message, 
             }
         }
 
+        case WM_LBUTTONDOWN: {
+            ApplicationState& application_state = get_application_state(window);
+            MouseInput& mouse_input = application_state.mouse_input;
+
+            mouse_input.left = true;
+            const HWND capturing_window = SetCapture(window);
+            assert(capturing_window == NULL);
+
+            return 0;
+        }
+
+        case WM_MOUSEMOVE: {
+            ApplicationState& application_state = get_application_state(window);
+            MouseInput& mouse_input = application_state.mouse_input;
+
+            mouse_input.x = l_param & 0xFFFF;
+            mouse_input.y = (l_param & 0xFFFF0000) >> 16;
+
+            return 0;
+        }
+
+        case WM_LBUTTONUP: {
+            ApplicationState& application_state = get_application_state(window);
+            MouseInput& mouse_input = application_state.mouse_input;
+
+            mouse_input.left = false;
+            const BOOL capture_released = ReleaseCapture();
+            assert(capture_released != FALSE);
+
+            return 0;
+        }
+
+        case WM_MOUSEWHEEL: {
+            ApplicationState& application_state = get_application_state(window);
+            MouseInput& mouse_input = application_state.mouse_input;
+
+            const short high_word = (w_param & 0xFFFF0000) >> 16;
+            mouse_input.scroll = high_word / WHEEL_DELTA;
+
+            return 0;
+        }
+
         default: {
             return DefWindowProcW(window, message, w_param, l_param);
         }
     }
 }
 
-int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
+HWND create_window(const HINSTANCE instance, const int client_width, const int client_height, ApplicationState& application_state) {
     static constexpr const wchar_t* WINDOW_CLASS_NAME = L"Main Window";
 
-    const HCURSOR cursor = LoadCursorA(NULL, IDC_ARROW);
+    const HCURSOR arrow_cursor = LoadCursorA(NULL, IDC_ARROW);
 
     WNDCLASSW window_class = {};
     window_class.style = CS_OWNDC;
@@ -302,7 +454,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     window_class.cbWndExtra = 0;
     window_class.hInstance = instance;
     window_class.hIcon = NULL;
-    window_class.hCursor = cursor;
+    window_class.hCursor = arrow_cursor;
     window_class.hbrBackground = NULL;
     window_class.lpszMenuName = nullptr;
     window_class.lpszClassName = WINDOW_CLASS_NAME;
@@ -315,13 +467,12 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     RECT window_rect = {};
     window_rect.left = 100;
     window_rect.top = 100;
-    window_rect.right = window_rect.left + CLIENT_WIDTH;
-    window_rect.bottom = window_rect.top + CLIENT_HEIGHT;
+    window_rect.right = window_rect.left + client_width;
+    window_rect.bottom = window_rect.top + client_height;
 
     const BOOL found_window_dimensions = AdjustWindowRect(&window_rect, WINDOW_STYLE, FALSE);
     assert(found_window_dimensions != FALSE);
 
-    ApplicationState application_state = {};
     const HWND window = CreateWindowExW(
         0,
         WINDOW_CLASS_NAME,
@@ -338,33 +489,10 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     );
 
     assert(window != NULL);
+    return window;
+}
 
-    const HDC window_device_context = GetDC(window);
-    assert(window_device_context != NULL);
-
-    const BOOL window_was_visible = ShowWindow(window, SW_SHOW);
-    assert(window_was_visible == FALSE);
-
-    BITMAPINFO bitmap_info = {};
-    bitmap_info.bmiHeader.biSize = sizeof(bitmap_info.bmiHeader);
-    bitmap_info.bmiHeader.biWidth = CLIENT_WIDTH;
-    bitmap_info.bmiHeader.biHeight = CLIENT_HEIGHT;
-    bitmap_info.bmiHeader.biPlanes = 1;
-    bitmap_info.bmiHeader.biBitCount = 32;
-    bitmap_info.bmiHeader.biCompression = BI_RGB;
-    bitmap_info.bmiHeader.biSizeImage = 0;
-    bitmap_info.bmiHeader.biXPelsPerMeter = 0;
-    bitmap_info.bmiHeader.biYPelsPerMeter = 0;
-    bitmap_info.bmiHeader.biClrUsed = 0;
-    bitmap_info.bmiHeader.biClrImportant = 0;
-
-    static constexpr u32 PIXEL_COUNT = CLIENT_WIDTH * CLIENT_HEIGHT;
-    real* const pixels_real = static_cast<real*>(VirtualAlloc(0, 4 * PIXEL_COUNT * sizeof(real), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-    assert(pixels_real != nullptr);
-
-    unsigned char* const pixels_u8 = static_cast<unsigned char*>(VirtualAlloc(0, 4 * PIXEL_COUNT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-    assert(pixels_u8 != nullptr);    
-
+int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     LARGE_INTEGER tick_frequency = {};
     const BOOL queried_performance_frequency = QueryPerformanceFrequency(&tick_frequency);
     assert(queried_performance_frequency != FALSE);
@@ -384,21 +512,6 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         const HANDLE thread_handle = CreateThread(nullptr, 0, thread_proc, static_cast<LPVOID>(&work_queue), 0, &thread_id);
         CloseHandle(thread_handle);
     }
-
-    static constexpr real FOV_Y = FOV_Y_DEGREES / 180.0f * PI;
-    const real viewport_height = 2.0f * std::tan(0.5f * FOV_Y);
-    const real viewport_width = ASPECT_RATIO * viewport_height;
-
-    const Vec3 camera_z = normalise(CAMERA_POSITION - CAMERA_TARGET);
-    const Vec3 camera_x = normalise(Vec3{0.0f, 1.0f, 0.0f} ^ camera_z);
-    const Vec3 camera_y = camera_z ^ camera_x;
-
-    // const real focus_distance = 10.0f;
-    const real focus_distance = magnitude(CAMERA_POSITION - CAMERA_TARGET);
-    const Vec3 step_x = focus_distance * viewport_width * camera_x;
-    const Vec3 step_y = focus_distance * viewport_height * camera_y;
-
-    const Vec3 bottom_left = CAMERA_POSITION - 0.5f * step_x - 0.5f * step_y - focus_distance * camera_z;
 
     static constexpr int SPHERE_COUNT = 22 * 22 + 4;
     Material materials[SPHERE_COUNT] = {};
@@ -490,7 +603,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
     assert(sphere_index == SPHERE_COUNT);
 
     const BVH sphere_bvh = construct_sphere_bvh(spheres, SPHERE_COUNT);
-    const Scene scene{
+    const Scene random_spheres{
         materials,
         spheres,
         &sphere_bvh,
@@ -501,6 +614,15 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         Colour{1.0f, 1.0f, 1.0f},
         Colour{0.5f, 0.7f, 1.0f}
     };
+
+    const Vec3 sphere_camera_start_position{13.0f, 2.0f, 3.0f};
+    Camera sphere_camera = {};
+    sphere_camera.target = Vec3{0.0f, 0.0f, 0.0f};
+    sphere_camera.orientation = look_at_matrix(sphere_camera_start_position, sphere_camera.target);
+    sphere_camera.distance = magnitude(sphere_camera_start_position - sphere_camera.target);
+    sphere_camera.fov_y = degrees_to_radians(20.0f);
+    sphere_camera.aperture = 0.1f;
+    sphere_camera.focus_distance = 10.0f;
 
     const Material cornell_materials[] = {
         construct_lambertian_material(Colour{0.65f, 0.05f, 0.05f}), // red
@@ -666,12 +788,21 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         Colour{0.0f, 0.0f, 0.0f}
     };
 
+    const Vec3 cornell_camera_start_position{278.0f, 278.0f, -800.0f};
+    Camera cornell_camera = {};
+    cornell_camera.target = Vec3{278.0f, 278.0f, 0.0f};
+    cornell_camera.orientation = look_at_matrix(cornell_camera_start_position, cornell_camera.target);
+    cornell_camera.distance = magnitude(cornell_camera_start_position - cornell_camera.target);
+    cornell_camera.fov_y = degrees_to_radians(40.0f);
+    cornell_camera.aperture = 0.1f;
+    cornell_camera.focus_distance = cornell_camera.distance;
+
     const Material model_materials[2] = {
         construct_lambertian_material(Colour{6.0f / 255.0f, 4.0f / 255.0f, 3.0f / 255.0f}),
         construct_diffuse_light_material(Colour{1.0f, 1.0f, 1.0f}, 10.0f)
     };
 
-    std::vector<Triangle> model_triangles = load_triangles_file(".\\models\\bishop.triangles");
+    std::vector<Triangle> model_triangles = load_triangles_file(".\\models\\rook.triangles");
     const std::vector<int> model_triangle_material_indices(model_triangles.size(), 0);
 
     const Mat3 model_transform = rotation_matrix(-PI / 2.0f, 1.0f, 0.0f, 0.0f);
@@ -695,24 +826,185 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         model_triangles.data(),
         &model_triangle_bvh,
         model_triangle_material_indices.data(),
-        Colour{0.0f, 0.0f, 0.0f},
-        Colour{0.0f, 0.0f, 0.0f}
+        Colour{0.01f, 0.01f, 0.01f},
+        Colour{0.01f, 0.01f, 0.01f}
     };
+
+    const Vec3 model_camera_start_position{0.0f, 150.0f, 150.0f};
+    Camera model_camera = {};
+    model_camera.target = Vec3{0.0f, 0.0f, 0.0f};
+    model_camera.orientation = look_at_matrix(model_camera_start_position, model_camera.target);
+    model_camera.distance = magnitude(model_camera_start_position - model_camera.target);
+    model_camera.fov_y = degrees_to_radians(40.0f);
+    model_camera.aperture = 0.1f;
+    model_camera.focus_distance = model_camera.distance;
+
+    ApplicationState application_state = {};
+    const HWND window = create_window(instance, CLIENT_WIDTH, CLIENT_HEIGHT, application_state);
+
+    const HDC window_device_context = GetDC(window);
+    assert(window_device_context != NULL);
+
+    const BOOL window_was_visible = ShowWindow(window, SW_SHOW);
+    assert(window_was_visible == FALSE);
+
+    BITMAPINFO bitmap_info = {};
+    bitmap_info.bmiHeader.biSize = sizeof(bitmap_info.bmiHeader);
+    bitmap_info.bmiHeader.biWidth = CLIENT_WIDTH;
+    bitmap_info.bmiHeader.biHeight = CLIENT_HEIGHT;
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+    bitmap_info.bmiHeader.biSizeImage = 0;
+    bitmap_info.bmiHeader.biXPelsPerMeter = 0;
+    bitmap_info.bmiHeader.biYPelsPerMeter = 0;
+    bitmap_info.bmiHeader.biClrUsed = 0;
+    bitmap_info.bmiHeader.biClrImportant = 0;
+
+    static constexpr u32 PIXEL_COUNT = CLIENT_WIDTH * CLIENT_HEIGHT;
+    real* const pixels_real = static_cast<real*>(VirtualAlloc(0, 4 * PIXEL_COUNT * sizeof(real), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));    // TODO: 3x, not 4x
+    assert(pixels_real != nullptr);
+
+    unsigned char* const pixels_u8 = static_cast<unsigned char*>(VirtualAlloc(0, 4 * PIXEL_COUNT, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    assert(pixels_u8 != nullptr);    
+
+    LARGE_INTEGER previous_time = {};
+    const BOOL read_previous_time = QueryPerformanceCounter(&previous_time);
+    assert(read_previous_time != FALSE);
+
+    const Scene& scene = model;
+    Camera& camera = model_camera;
 
     ApplicationState previous_application_state = application_state;
 
     bool quit = false;
     int sample = 0;
     while (!quit) {
-        LARGE_INTEGER render_start_time = {};
-        const BOOL read_start_time = QueryPerformanceCounter(&render_start_time);
-        assert(read_start_time != FALSE);
+        LARGE_INTEGER current_time = {};
+        const BOOL read_current_time = QueryPerformanceCounter(&current_time);
+        assert(read_current_time != FALSE);
+
+        const real frame_duration = static_cast<real>(current_time.QuadPart - previous_time.QuadPart) / static_cast<real>(tick_frequency.QuadPart);
+        previous_time = current_time;
+
+        bool camera_modified = false;
+
+        MouseInput& mouse_input = application_state.mouse_input;
+        const MouseInput& previous_mouse_input = previous_application_state.mouse_input;
+        
+        const bool left_mouse_button_held = mouse_input.left && previous_mouse_input.left;
+        const int mouse_delta_x = mouse_input.x - previous_mouse_input.x;
+        const int mouse_delta_y = mouse_input.y - previous_mouse_input.y;
+        if (left_mouse_button_held && (mouse_delta_x != 0 || mouse_delta_y != 0)) {
+            static constexpr real MOUSE_SENSITIVITY = 4.0f;
+            const real camera_yaw_delta = static_cast<real>(mouse_delta_x) * MOUSE_SENSITIVITY * frame_duration;
+            const real camera_pitch_delta = -static_cast<real>(mouse_delta_y) * MOUSE_SENSITIVITY * frame_duration;
+
+            const Mat3 camera_yaw_delta_rotation = rotation_matrix(degrees_to_radians(camera_yaw_delta), 0.0f, 0.0f, 1.0f);
+            const Mat3 camera_pitch_delta_rotation = rotation_matrix(degrees_to_radians(camera_pitch_delta), 1.0f, 0.0f, 0.0f);
+            camera.orientation = camera_yaw_delta_rotation * camera.orientation * camera_pitch_delta_rotation;
+
+            camera_modified = true;
+        }
+
+        static constexpr float SCROLL_SENSITIVITY = 0.95f;
+        if (mouse_input.scroll > 0) {
+          for (int i = 0; i < mouse_input.scroll; ++i) {
+            camera.distance *= SCROLL_SENSITIVITY;
+          }
+
+          camera_modified = true;
+        }
+        else if (mouse_input.scroll < 0) {
+          for (int i = mouse_input.scroll; i < 0; ++i) {
+            camera.distance /= SCROLL_SENSITIVITY;
+          }
+
+          camera_modified = true;
+        }
+
+        mouse_input.scroll = 0; // scroll handled
+
+        const Vec3 camera_x = get_column(camera.orientation, 0);
+        const Vec3 camera_y = get_column(camera.orientation, 1);
+        const Vec3 camera_z = get_column(camera.orientation, 2);
+
+        static constexpr float CAMERA_SPEED = 0.6f;
+        const KeyboardInput& keyboard_input = application_state.keyboard_input;
+        if (keyboard_input.a) {
+            camera.target = camera.target - camera.distance * CAMERA_SPEED * frame_duration * camera_x;
+            camera_modified = true;
+        }
+
+        if (keyboard_input.d) {
+            camera.target = camera.target + camera.distance * CAMERA_SPEED * frame_duration * camera_x;
+            camera_modified = true;
+        }
+
+        if (keyboard_input.w) {
+            camera.target = camera.target + camera.distance * CAMERA_SPEED * frame_duration * camera_y;
+            camera_modified = true;
+        }
+
+        if (keyboard_input.s) {
+            camera.target = camera.target - camera.distance * CAMERA_SPEED * frame_duration * camera_y;
+            camera_modified = true;
+        }
+
+        static constexpr real FOV_SENSITIVITY = 0.1f;
+        if (keyboard_input.q) {
+            camera.fov_y -= FOV_SENSITIVITY * frame_duration;
+            camera_modified = true;
+        }
+
+        if (keyboard_input.e) {
+            camera.fov_y += FOV_SENSITIVITY * frame_duration;
+            camera_modified = true;
+        }
+
+        static constexpr real FOCUS_SENSITIVITY = 1.0f;
+        if (keyboard_input.up) {
+            camera.focus_distance += FOCUS_SENSITIVITY * frame_duration * camera.distance;
+            camera_modified = true;
+        }
+
+        if (keyboard_input.down) {
+            camera.focus_distance -= FOCUS_SENSITIVITY * frame_duration * camera.distance;
+            camera_modified = true;
+        }
+
+        static constexpr real APERTURE_SENSITIVITY = 0.1f;
+        if (keyboard_input.left) {
+            camera.aperture -= APERTURE_SENSITIVITY * frame_duration;
+            camera_modified = true;
+        }
+
+        if (keyboard_input.right) {
+            camera.aperture += APERTURE_SENSITIVITY * frame_duration;
+            camera_modified = true;
+        }
+
+        const Vec3 camera_position = get_position(camera);
+
+        const real viewport_height = 2.0f * std::tan(0.5f * camera.fov_y);
+        const real viewport_width = ASPECT_RATIO * viewport_height;
+
+        const Vec3 step_x = camera.focus_distance * viewport_width * camera_x;
+        const Vec3 step_y = camera.focus_distance * viewport_height * camera_y;
+        const Vec3 bottom_left = camera_position - 0.5f * step_x - 0.5f * step_y - camera.focus_distance * camera_z;
+
+        if (camera_modified) {
+            memset(pixels_real, 0, 4 * sizeof(real) * PIXEL_COUNT);
+            sample = 0;
+        }
 
         for (int row = 0; row < CLIENT_HEIGHT; ++row) {
             RenderWorkQueue::Entry entry = {};
             entry.row = row;
             entry.sample = sample;
-            entry.scene = model;
+            entry.scene = scene;
+            entry.aperture = camera.aperture;
+            entry.camera_position = camera_position;
             entry.camera_x = camera_x;
             entry.camera_y = camera_y;
             entry.bottom_left = bottom_left;
@@ -728,12 +1020,6 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
         }
 
         reset(work_queue);
-
-        LARGE_INTEGER render_finish_time = {};
-        const BOOL read_finish_time = QueryPerformanceCounter(&render_finish_time);
-        assert(read_finish_time != FALSE);
-
-        const real render_duration = static_cast<real>(render_finish_time.QuadPart - render_start_time.QuadPart) / static_cast<real>(tick_frequency.QuadPart);
 
         for (int pixel_index = 0; pixel_index < PIXEL_COUNT; ++pixel_index) {
             const int index = 4 * pixel_index;
@@ -767,8 +1053,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
         assert(scanlines_copied == CLIENT_HEIGHT);
 
-        const KeyboardInput keyboard_input = application_state.keyboard_input;
-        const KeyboardInput previous_keyboard_input = previous_application_state.keyboard_input;
+        const KeyboardInput& previous_keyboard_input = previous_application_state.keyboard_input;
         if (keyboard_input.ctrl && !keyboard_input.s && previous_keyboard_input.s) {
             write_pixel_data_to_file(pixels_u8, 4 * PIXEL_COUNT);
         }

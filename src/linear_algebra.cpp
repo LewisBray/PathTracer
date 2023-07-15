@@ -65,6 +65,10 @@ static Mat3 operator*(const Mat3& lhs, const Mat3& rhs) {
     return result;
 }
 
+static Vec3 get_column(const Mat3& m, const int column) {
+    return Vec3{m.rows[0][column], m.rows[1][column], m.rows[2][column]};
+}
+
 static Mat3 scaling_matrix(const real x_scale, const real y_scale, const real z_scale) {
     Mat3 result = {};
     result.rows[0][0] = x_scale;
@@ -92,6 +96,27 @@ static Mat3 rotation_matrix(const real angle, const real axis_x, const real axis
     result.rows[2][0] = (1.0f - cos_angle) * rotation_vector.x * rotation_vector.z - sin_angle * rotation_vector.y;
     result.rows[2][1] = (1.0f - cos_angle) * rotation_vector.y * rotation_vector.z + sin_angle * rotation_vector.x;
     result.rows[2][2] = (1.0f - cos_angle) * rotation_vector.z * rotation_vector.z + cos_angle;
+
+    return result;
+}
+
+static Mat3 look_at_matrix(const Vec3& position, const Vec3& target) {
+    const Vec3 z_axis = normalise(position - target);
+    const Vec3 x_axis = normalise(Vec3{0.0f, 1.0f, 0.0f} ^ z_axis); // TODO: handle z_axis being parallel to j
+    const Vec3 y_axis = z_axis ^ x_axis;
+
+    Mat3 result = {};
+    result.rows[0][0] = x_axis.x;
+    result.rows[1][0] = x_axis.y;
+    result.rows[2][0] = x_axis.z;
+
+    result.rows[0][1] = y_axis.x;
+    result.rows[1][1] = y_axis.y;
+    result.rows[2][1] = y_axis.z;
+
+    result.rows[0][2] = z_axis.x;
+    result.rows[1][2] = z_axis.y;
+    result.rows[2][2] = z_axis.z;
 
     return result;
 }

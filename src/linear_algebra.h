@@ -25,7 +25,9 @@ struct Mat3 {
 
 static Vec3 operator*(const Mat3& m, const Vec3& v);
 static Mat3 operator*(const Mat3& lhs, const Mat3& rhs);
+static Vec3 get_column(const Mat3& m, int column);
 static Mat3 scaling_matrix(real x_scale, real y_scale, real z_scale);
 static Mat3 rotation_matrix(real angle, real axis_x, real axis_y, real axis_z);
+static Mat3 look_at_matrix(const Vec3& position, const Vec3& target);
 
 #endif

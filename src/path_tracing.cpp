@@ -225,3 +225,7 @@ static Colour intersect(Ray ray, const Scene& scene) {
 
     return colour;
 }
+
+static Vec3 get_position(const Camera& camera) {
+    return camera.orientation * Vec3{0.0f, 0.0f, camera.distance} + camera.target;
+}
